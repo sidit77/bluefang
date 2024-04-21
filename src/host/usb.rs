@@ -1,4 +1,4 @@
-use nusb::{Device, Error, Interface};
+use nusb::{Device, DeviceInfo, Error, Interface};
 use nusb::descriptors::InterfaceAltSetting;
 use nusb::transfer::Direction::{In, Out};
 use nusb::transfer::EndpointType::{Bulk, Interrupt};
@@ -13,8 +13,9 @@ pub struct UsbController {
 
 impl UsbController {
 
-    pub fn list() -> Result<impl Iterator<Item=UsbController>, Error> {
+    pub fn list<F: FnMut(&DeviceInfo) -> bool>(filter: F) -> Result<impl Iterator<Item=UsbController>, Error> {
         Ok(nusb::list_devices()?
+            .filter(filter)
             .filter_map(|info| info
                 .open()
                 .map_err(|e| warn!("Failed to open device ({e})"))

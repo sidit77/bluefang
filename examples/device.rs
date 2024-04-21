@@ -13,7 +13,7 @@ async fn main() -> anyhow::Result<()> {
         .with(layer().without_time())
         .init();
 
-    let usb = UsbController::list()?
+    let usb = UsbController::list(|info| info.vendor_id() == 0x2B89)?
         .next()
         .context("failed to find device")?
         .claim()?;
