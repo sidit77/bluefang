@@ -1,13 +1,9 @@
 use anyhow::Context;
-use nusb::{Device, Interface, list_devices};
-use nusb::descriptors::{InterfaceAltSetting};
 use nusb::transfer::{ControlOut, ControlType, Recipient, RequestBuffer};
-use tracing::{debug, info, warn};
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use redtooth::ensure;
-use redtooth::utils::IteratorExt;
+use redtooth::host::usb::UsbController;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -15,23 +11,7 @@ async fn main() -> anyhow::Result<()> {
         .with(layer().without_time())
         .init();
 
-    for device in list_devices()?
-       // .filter(|d| d.vendor_id() == 0x2b89)
-    {
-        //info!("{:#?}", device);
-        let device = device.open()?;
-        if let Some(e) = Endpoints::discover(&device) {
-            info!("{:#?}", e);
-        }
-    }
-
-    let usb = list_devices()?
-        .filter_map(|info| info
-            .open()
-            .map_err(|e| warn!("Failed to open device ({e})"))
-            .ok())
-        .filter_map(|device| Endpoints::discover(&device)
-            .map(|endpoints| UsbController { device, endpoints }))
+    let usb = UsbController::list()?
         .next()
         .context("failed to find device")?
         .claim()?;
@@ -71,6 +51,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 // Opcode group field definitions.
+#[allow(dead_code)]
 #[derive(Clone, Copy)]
 #[repr(u16)]
 enum OpcodeGroup {
@@ -92,71 +73,3 @@ impl OpcodeGroup {
     }
 }
 
-pub struct UsbController {
-    device: Device,
-    endpoints: Endpoints
-}
-
-impl UsbController {
-    pub fn claim(self) -> anyhow::Result<UsbHost> {
-        debug!("Claiming main interface");
-        let interface = self.device.detach_and_claim_interface(self.endpoints.main_iface)?;
-        Ok(UsbHost {
-            device: self.device,
-            endpoints: self.endpoints,
-            interface,
-        })
-    }
-}
-
-pub struct UsbHost {
-    device: Device,
-    endpoints: Endpoints,
-    interface: Interface
-}
-
-/// USB addresses for Bluetooth interfaces and endpoints ([Vol 4] Part B, Section 2.1.1).
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-struct Endpoints {
-    main_iface: u8,
-    event: u8,
-    acl_out: u8,
-    acl_in: u8,
-}
-
-impl Endpoints {
-
-    fn discover(dev: &Device) -> Option<Self> {
-       dev
-           .active_configuration()
-           .map_err(|e| warn!("Failed to get config descriptor ({e})"))
-           .ok()?
-           .interfaces()
-            .filter_map(|ifg| {
-                let ifas = ifg.alt_settings().single().filter(Self::is_bluetooth)?;
-                ensure!(ifas.alternate_setting() == 0 && ifas.num_endpoints() == 3);
-
-                let mut r = Endpoints { main_iface: ifas.interface_number(), event: 0, acl_out: 0, acl_in: 0 };
-                for epd in ifas.endpoints() {
-                    use nusb::transfer::{Direction::*, EndpointType::*};
-                    match (epd.transfer_type(), epd.direction()) {
-                        (Interrupt, In) => r.event = epd.address(),
-                        (Bulk, In) => r.acl_in = epd.address(),
-                        (Bulk, Out) => r.acl_out = epd.address(),
-                        _ => {
-                            warn!("Unexpected endpoint: {epd:?}");
-                            return None;
-                        }
-                    }
-                }
-                Some(r)
-            })
-            .next()
-    }
-
-    fn is_bluetooth(ifas: &InterfaceAltSetting) -> bool {
-        // [Vol 4] Part B, Section 3.1
-        ifas.class() == 0xE0 && ifas.subclass() == 0x01 && ifas.protocol() == 0x01
-    }
-
-}
