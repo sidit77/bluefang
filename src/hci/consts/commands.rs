@@ -1,7 +1,9 @@
+use std::fmt::{Debug, Formatter};
+use num_enum::TryFromPrimitive;
 
 // Opcode group field definitions.
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, TryFromPrimitive)]
 #[repr(u16)]
 pub enum OpcodeGroup {
     LinkControl = 0x01,
@@ -14,7 +16,7 @@ pub enum OpcodeGroup {
     Vendor = 0x3F, // [Vol 4] Part E, Section 5.4.1
 }
 
-#[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Default, Copy, Clone, Eq, PartialEq)]
 pub struct Opcode(u16);
 
 #[allow(dead_code)]
@@ -38,11 +40,33 @@ impl Opcode {
         Self((group as u16) << 10 | ocf)
     }
 
+    pub fn split(&self) -> Option<(OpcodeGroup, u16)> {
+        OpcodeGroup::try_from((self.0 >> 10) & 0x3F)
+            .ok()
+            .map(|group| (group, self.0 & 0x3FF))
+    }
+
+}
+
+impl Debug for Opcode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.split() {
+            Some((group, ocf)) => write!(f, "Opcode({:?}, 0x{:03X})", group, ocf),
+            None => write!(f, "Opcode(0x{:04X})", self.0),
+        }
+    }
 }
 
 impl From<Opcode> for u16 {
     #[inline]
     fn from(opcode: Opcode) -> u16 {
         opcode.0
+    }
+}
+
+impl From<u16> for Opcode {
+    #[inline]
+    fn from(opcode: u16) -> Opcode {
+        Opcode(opcode)
     }
 }

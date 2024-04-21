@@ -1,5 +1,4 @@
 use anyhow::Context;
-use nusb::transfer::{ControlOut, ControlType, Recipient, RequestBuffer};
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;

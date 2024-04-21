@@ -11,6 +11,7 @@ nusb = "0.1.7"
 thiserror = "1.0.59"
 tokio = { version = "1.37.0", features = ["full"] }
 smallvec = "1.13.2"
+num_enum = "0.7.2"
 
 [dev-dependencies]
 tracing-subscriber = "0.3.18"
