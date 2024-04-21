@@ -1,30 +1,48 @@
-use smallvec::SmallVec;
-use tracing::debug;
+use std::collections::VecDeque;
+use parking_lot::Mutex;
+use tokio::sync::oneshot::{Receiver, Sender};
+use tracing::{debug, trace};
 use crate::ensure;
 use crate::hci::buffer::ReceiveBuffer;
-use crate::hci::consts::{EventCode, Opcode, Status};
+use crate::hci::consts::{EventCode, Opcode};
 use crate::hci::Error;
 
 #[derive(Default)]
 pub struct EventRouter {
-
+    commands: Mutex<VecDeque<(Opcode, Sender<ReceiveBuffer>)>>
 }
 
 impl EventRouter {
+
+    pub async fn reserve(&self, opcode: Opcode) -> Receiver<ReceiveBuffer> {
+        // TODO implement command quota
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.commands.lock().push_back((opcode, tx));
+        rx
+    }
+
     pub fn handle_event(&self, data: &[u8]) -> Result<(), Error> {
         let (code, mut payload) = Self::parse_event(data)?;
         match code {
             EventCode::CommandComplete => {
-                let rem_packets = payload.get_u8().unwrap();
-                let opcode = Opcode::from(payload.get_u16().unwrap());
-                let status = Status::from(payload.get_u8().unwrap());
-                debug!("HCI event: CommandComplete {:?} {:?} {:?}", rem_packets, opcode, status);
+                // HCI event packet ([Vol 4] Part E, Section 7.7.14).
+                let (_cmd_quota, opcode) = Option::zip(payload.get_u8(), payload.get_u16().map(Opcode::from))
+                    .ok_or(Error::BadEventPacketSize)?;
+                trace!("Received CommandComplete for {:?}", opcode);
+                let (_, tx) = {
+                    let mut commands = self.commands.lock();
+                    let pos = commands.iter().position(|(op, _)| *op == opcode)
+                        .ok_or(Error::UnexpectedCommandResponse(opcode))?;
+                    commands.remove(pos).unwrap()
+                };
+                tx.send(payload).unwrap_or_else(|_| debug!("CommandComplete receiver dropped"));
             }
             _ => debug!("HCI event: {:?} {:?}", code, payload),
         }
         Ok(())
     }
 
+    /// HCI event packet ([Vol 4] Part E, Section 5.4.4).
     fn parse_event(data: &[u8]) -> Result<(EventCode, ReceiveBuffer), Error> {
         data
             .split_first_chunk()
@@ -38,12 +56,12 @@ impl EventRouter {
     }
 }
 
-pub trait FromEvent {
-    fn unpack(buf: &mut ReceiveBuffer) -> Self;
+pub trait FromEvent: Sized {
+    fn unpack(buf: &mut ReceiveBuffer) -> Option<Self>;
 }
 
 impl FromEvent for () {
-    fn unpack(_: &mut ReceiveBuffer) -> Self {
-        ()
+    fn unpack(_: &mut ReceiveBuffer) -> Option<Self> {
+        Some(())
     }
 }

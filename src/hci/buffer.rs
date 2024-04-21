@@ -73,7 +73,7 @@ impl ReceiveBuffer {
         value
     }
 
-    fn remaining(&self) -> usize {
+    pub(crate) fn remaining(&self) -> usize {
         self.data.len() - self.index
     }
 }
