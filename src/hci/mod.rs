@@ -6,9 +6,11 @@ mod commands;
 
 use std::future::Future;
 use std::mem::size_of;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use nusb::transfer::{ControlOut, ControlType, Recipient, RequestBuffer};
+use parking_lot::Mutex;
 use tokio::spawn;
 use tokio::task::JoinHandle;
 use tracing::{debug, error};
@@ -19,6 +21,7 @@ use crate::hci::events::{EventRouter, FromEvent};
 use crate::hci::consts::Status;
 
 pub use commands::*;
+
 
 
 const MAX_HCI_EVENT_SIZE: usize = 1 + size_of::<u8>() + u8::MAX as usize;
@@ -45,6 +48,8 @@ impl Host {
         tokio::time::sleep(Duration::from_millis(100)).await;
         debug!("HCI reset...");
         host.reset().await?;
+
+        Self::try_load_firmware(&host).await;
 
         debug!("HCI version: {:?}", host.read_local_version().await?);
 
@@ -145,3 +150,29 @@ impl Error {
         }
     }
 }
+
+pub trait FirmwareLoader {
+    fn try_load_firmware<'a>(&'a self, host: &'a Host) -> Pin<Box<dyn Future<Output=Result<bool, Error>> + Send + 'a>>;
+}
+
+impl Host {
+
+    const FIRMWARE_LOADERS: Mutex<Vec<Box<dyn FirmwareLoader>>> = Mutex::new(Vec::new());
+
+    pub fn register_firmware_loader<FL: FirmwareLoader + 'static>(loader: FL) {
+        Self::FIRMWARE_LOADERS.lock().push(Box::new(loader));
+    }
+
+    async fn try_load_firmware(&self) {
+        for loader in &*Self::FIRMWARE_LOADERS.lock() {
+
+            match loader.try_load_firmware(self).await {
+                Ok(true) => break,
+                Ok(false) => continue,
+                Err(err) => error!("Failed to load firmware: {:?}", err)
+            }
+        }
+    }
+
+}
+
