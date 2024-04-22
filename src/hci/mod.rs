@@ -2,19 +2,24 @@ pub mod consts;
 mod error;
 mod buffer;
 mod events;
+mod commands;
 
 use std::future::Future;
 use std::mem::size_of;
 use std::sync::Arc;
+use std::time::Duration;
 use nusb::transfer::{ControlOut, ControlType, Recipient, RequestBuffer};
 use tokio::spawn;
 use tokio::task::JoinHandle;
-use tracing::{error};
+use tracing::{debug, error};
 use crate::ensure;
-use crate::hci::consts::{Opcode, Status};
 use crate::host::usb::UsbHost;
 use crate::hci::buffer::SendBuffer;
 use crate::hci::events::{EventRouter, FromEvent};
+use crate::hci::consts::Status;
+
+pub use commands::*;
+
 
 const MAX_HCI_EVENT_SIZE: usize = 1 + size_of::<u8>() + u8::MAX as usize;
 const HCI_EVENT_QUEUE_SIZE: usize = 4;
@@ -27,14 +32,25 @@ pub struct Host {
 }
 
 impl Host {
-    pub fn new(transport: UsbHost) -> Self {
+    pub async fn new(transport: UsbHost) -> Result<Self, Error> {
         let router = Arc::new(EventRouter::default());
         let event_loop = spawn(Self::event_loop(&transport, router.clone()));
-        Host {
+        let host = Host {
             transport,
             router,
             event_loop,
-        }
+        };
+
+        // Reset after allowing the event loop to discard any unexpected events
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        debug!("HCI reset...");
+        host.reset().await?;
+
+        debug!("HCI version: {:?}", host.read_local_version().await?);
+
+        debug!("{:?}", host.read_local_supported_commands().await?);
+
+        Ok(host)
     }
 
     fn event_loop(transport: &UsbHost, router: Arc<EventRouter>) -> impl Future<Output=()> {
@@ -119,4 +135,13 @@ pub enum Error {
     UnexpectedCommandResponse(Opcode),
     #[error(transparent)]
     Controller(#[from] Status)
+}
+
+impl Error {
+    pub fn is_timeout(&self) -> bool {
+        match self {
+            Error::TransportError(err) => err.kind() == std::io::ErrorKind::TimedOut,
+            _ => false
+        }
+    }
 }

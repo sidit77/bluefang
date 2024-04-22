@@ -1,5 +1,11 @@
+mod info_params;
+mod hci_control;
+
 use std::fmt::{Debug, Formatter};
 use num_enum::TryFromPrimitive;
+
+pub use info_params::*;
+//pub use hci_control::*;
 
 // Opcode group field definitions.
 #[allow(dead_code)]
@@ -25,9 +31,6 @@ impl Opcode {
     /// Opcode 0x0000 is used to update `Num_HCI_Command_Packets`
     /// ([Vol 4] Part E, Section 7.7.14).
     const NONE: Opcode = Opcode(0x0000);
-
-    // HCI Control and Baseband commands ([Vol 4] Part E, Section 7.3)
-    pub const RESET: Opcode = Opcode::new(OpcodeGroup::HciControl, 0x0003);
 
 }
 

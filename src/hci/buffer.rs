@@ -73,6 +73,13 @@ impl ReceiveBuffer {
         value
     }
 
+    pub fn get_bytes<const N: usize>(&mut self) -> Option<[u8; N]> {
+        let value = self.data.get_chunk(self.index)
+            .copied();
+        self.index += N;
+        value
+    }
+
     pub(crate) fn remaining(&self) -> usize {
         self.data.len() - self.index
     }

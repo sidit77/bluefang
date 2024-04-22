@@ -2,7 +2,6 @@ use anyhow::Context;
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use redtooth::hci::consts::Opcode;
 use redtooth::hci::Host;
 use redtooth::host::usb::UsbController;
 
@@ -17,8 +16,9 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to find device")?
         .claim()?;
 
-    let host = Host::new(usb);
-    host.call(Opcode::RESET).await?;
+    let _host = Host::new(usb).await?;
+
+
 
     tokio::signal::ctrl_c().await?;
 

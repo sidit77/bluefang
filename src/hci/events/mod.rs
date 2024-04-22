@@ -4,7 +4,8 @@ use tokio::sync::oneshot::{Receiver, Sender};
 use tracing::{debug, trace};
 use crate::ensure;
 use crate::hci::buffer::ReceiveBuffer;
-use crate::hci::consts::{EventCode, Opcode};
+use crate::hci::commands::Opcode;
+use crate::hci::consts::{EventCode};
 use crate::hci::Error;
 
 #[derive(Default)]
