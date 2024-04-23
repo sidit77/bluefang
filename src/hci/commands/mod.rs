@@ -1,10 +1,12 @@
 mod info_params;
 mod hci_control;
+mod link_control;
 
 use std::fmt::{Debug, Formatter};
 use num_enum::TryFromPrimitive;
 
 pub use info_params::*;
+//pub use link_control::*;
 //pub use hci_control::*;
 
 // Opcode group field definitions.

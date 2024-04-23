@@ -26,6 +26,15 @@ impl SendBuffer {
     }
 
     #[inline]
+    pub fn u24(&mut self, value: impl Into<u32>) -> &mut Self {
+        let v = value.into().to_le_bytes();
+        assert_eq!(v[3], 0);
+        self.0.extend_from_slice(&v[..3]);
+        self
+    }
+
+
+    #[inline]
     pub fn bytes(&mut self, bytes: &[u8]) -> &mut Self {
         self.0.extend_from_slice(bytes);
         self
@@ -86,6 +95,13 @@ impl ReceiveBuffer {
         value
     }
 
+    pub fn get_u24(&mut self) -> Option<u32> {
+        let value = self.data.get_chunk::<3>(self.index)
+            .map(|b| (b[2] as u32) | ((b[1] as u32) << 8) | ((b[0] as u32) << 16));
+        self.index += 3;
+        value
+    }
+
     pub fn get_bytes<const N: usize>(&mut self) -> Option<[u8; N]> {
         let value = self.data.get_chunk(self.index)
             .copied();
@@ -93,8 +109,15 @@ impl ReceiveBuffer {
         value
     }
 
+    pub fn skip(&mut self, n: usize) {
+        self.index += n;
+    }
+
     pub(crate) fn remaining(&self) -> usize {
         self.data.len() - self.index
+    }
+    pub(crate) fn get_mut(&mut self) -> &mut [u8] {
+        self.data[self.index..].as_mut()
     }
 }
 

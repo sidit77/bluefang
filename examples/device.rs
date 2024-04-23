@@ -4,7 +4,8 @@ use tracing_subscriber::fmt::layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use redtooth::firmware::RealTekFirmwareLoader;
-use redtooth::hci::Hci;
+use redtooth::hci::{Hci};
+use redtooth::hci::consts::Lap;
 use redtooth::host::usb::UsbController;
 
 #[tokio::main]
@@ -21,8 +22,8 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to find device")?
         .claim()?;
 
-    let _host = Hci::new(usb).await?;
-
+    let host = Hci::new(usb).await?;
+    host.inquiry(Lap::General, 5, 0).await?;
 
 
     tokio::signal::ctrl_c().await?;
