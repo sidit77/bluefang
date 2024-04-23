@@ -66,3 +66,9 @@ impl FromEvent for () {
         Some(())
     }
 }
+
+impl FromEvent for u8 {
+    fn unpack(buf: &mut ReceiveBuffer) -> Option<Self> {
+        buf.get_u8()
+    }
+}

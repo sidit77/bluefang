@@ -7,7 +7,7 @@ mod commands;
 use std::future::Future;
 use std::mem::size_of;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc};
 use std::time::Duration;
 use nusb::transfer::{ControlOut, ControlType, Recipient, RequestBuffer};
 use parking_lot::Mutex;
@@ -84,9 +84,9 @@ impl Hci {
     pub async fn call_with_args<T: FromEvent>(&self, cmd: Opcode, packer: impl FnOnce(&mut SendBuffer)) -> Result<T, Error> {
         // TODO: check if the command is supported
         let mut buf = SendBuffer::default();
-        buf.put_u16(cmd);
+        buf.u16(cmd);
         // we'll update this later
-        buf.put_u8(0);
+        buf.u8(0);
         packer(&mut buf);
         let payload_len = u8::try_from(buf.len() - 3).map_err(|_| Error::PayloadTooLarge)?;
         buf.set_u8(2, payload_len);
@@ -103,6 +103,7 @@ impl Hci {
         }).await;
         cmd.status?;
 
+        //TODO: 1s timeout
         let mut resp = rx.await.expect("Message handler dropped");
         let status = Status::from(resp.get_u8().ok_or(Error::BadEventPacketSize)?);
         match status {
@@ -126,6 +127,8 @@ impl Drop for Hci {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    #[error("{0}")]
+    Generic(&'static str),
     #[error(transparent)]
     TransportError(#[from] nusb::Error),
     #[error(transparent)]
@@ -155,17 +158,15 @@ pub trait FirmwareLoader {
     fn try_load_firmware<'a>(&'a self, hci: &'a Hci) -> Pin<Box<dyn Future<Output=Result<bool, Error>> + Send + 'a>>;
 }
 
+static FIRMWARE_LOADERS: Mutex<Vec<Box<dyn FirmwareLoader + Send>>> = Mutex::new(Vec::new());
 impl Hci {
 
-    const FIRMWARE_LOADERS: Mutex<Vec<Box<dyn FirmwareLoader>>> = Mutex::new(Vec::new());
-
-    pub fn register_firmware_loader<FL: FirmwareLoader + 'static>(loader: FL) {
-        Self::FIRMWARE_LOADERS.lock().push(Box::new(loader));
+    pub fn register_firmware_loader<FL: FirmwareLoader + Send + 'static>(loader: FL) {
+        FIRMWARE_LOADERS.lock().push(Box::new(loader));
     }
 
     async fn try_load_firmware(&self) {
-        for loader in &*Self::FIRMWARE_LOADERS.lock() {
-
+        for loader in &*FIRMWARE_LOADERS.lock() {
             match loader.try_load_firmware(self).await {
                 Ok(true) => break,
                 Ok(false) => continue,

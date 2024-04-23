@@ -1,4 +1,5 @@
 use anyhow::Context;
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -10,6 +11,7 @@ use redtooth::host::usb::UsbController;
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(layer().without_time())
+        .with(EnvFilter::from_default_env())
         .init();
 
     Hci::register_firmware_loader(RealTekFirmwareLoader::new());

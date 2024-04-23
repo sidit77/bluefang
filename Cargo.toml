@@ -15,5 +15,5 @@ num_enum = "0.7.2"
 parking_lot = "0.12.1"
 
 [dev-dependencies]
-tracing-subscriber = "0.3.18"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 anyhow = "1.0.82"

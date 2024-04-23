@@ -1,5 +1,6 @@
 use std::fmt::{Debug, Formatter};
 use smallvec::SmallVec;
+use crate::hci::Error;
 use crate::utils::SliceExt;
 
 #[derive(Default)]
@@ -13,14 +14,20 @@ impl SendBuffer {
     }
 
     #[inline]
-    pub fn put_u8(&mut self, value: impl Into<u8>) -> &mut Self {
+    pub fn u8(&mut self, value: impl Into<u8>) -> &mut Self {
         self.0.push(value.into());
         self
     }
 
     #[inline]
-    pub fn put_u16(&mut self, value: impl Into<u16>) -> &mut Self {
+    pub fn u16(&mut self, value: impl Into<u16>) -> &mut Self {
         self.0.extend_from_slice(&value.into().to_le_bytes());
+        self
+    }
+
+    #[inline]
+    pub fn bytes(&mut self, bytes: &[u8]) -> &mut Self {
+        self.0.extend_from_slice(bytes);
         self
     }
 
@@ -36,6 +43,12 @@ impl SendBuffer {
         &self.0
     }
 
+}
+
+impl From<&'static str> for Error {
+    fn from(value: &'static str) -> Self {
+        Self::Generic(value)
+    }
 }
 
 impl Debug for SendBuffer {
