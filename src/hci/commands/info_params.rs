@@ -1,11 +1,11 @@
-use crate::hci::{Error, Host};
+use crate::hci::{Error, Hci};
 use crate::hci::buffer::ReceiveBuffer;
 use crate::hci::commands::{Opcode, OpcodeGroup};
 use crate::hci::consts::{CompanyId, CoreVersion};
 use crate::hci::events::FromEvent;
 
 /// Informational parameters commands ([Vol 4] Part E, Section 7.4).
-impl Host {
+impl Hci {
 
     /// Returns the controller's version information
     /// ([Vol 4] Part E, Section 7.4.1).

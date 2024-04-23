@@ -28,17 +28,17 @@ const MAX_HCI_EVENT_SIZE: usize = 1 + size_of::<u8>() + u8::MAX as usize;
 const HCI_EVENT_QUEUE_SIZE: usize = 4;
 
 //TODO make generic over transport
-pub struct Host {
+pub struct Hci {
     transport: UsbHost,
     router: Arc<EventRouter>,
     event_loop: JoinHandle<()>
 }
 
-impl Host {
+impl Hci {
     pub async fn new(transport: UsbHost) -> Result<Self, Error> {
         let router = Arc::new(EventRouter::default());
         let event_loop = spawn(Self::event_loop(&transport, router.clone()));
-        let host = Host {
+        let hci = Hci {
             transport,
             router,
             event_loop,
@@ -47,15 +47,15 @@ impl Host {
         // Reset after allowing the event loop to discard any unexpected events
         tokio::time::sleep(Duration::from_millis(100)).await;
         debug!("HCI reset...");
-        host.reset().await?;
+        hci.reset().await?;
 
-        Self::try_load_firmware(&host).await;
+        Self::try_load_firmware(&hci).await;
 
-        debug!("HCI version: {:?}", host.read_local_version().await?);
+        debug!("HCI version: {:?}", hci.read_local_version().await?);
 
-        debug!("{:?}", host.read_local_supported_commands().await?);
+        debug!("{:?}", hci.read_local_supported_commands().await?);
 
-        Ok(host)
+        Ok(hci)
     }
 
     fn event_loop(transport: &UsbHost, router: Arc<EventRouter>) -> impl Future<Output=()> {
@@ -117,7 +117,7 @@ impl Host {
 
 }
 
-impl Drop for Host {
+impl Drop for Hci {
     fn drop(&mut self) {
         self.event_loop.abort();
     }
@@ -152,10 +152,10 @@ impl Error {
 }
 
 pub trait FirmwareLoader {
-    fn try_load_firmware<'a>(&'a self, host: &'a Host) -> Pin<Box<dyn Future<Output=Result<bool, Error>> + Send + 'a>>;
+    fn try_load_firmware<'a>(&'a self, hci: &'a Hci) -> Pin<Box<dyn Future<Output=Result<bool, Error>> + Send + 'a>>;
 }
 
-impl Host {
+impl Hci {
 
     const FIRMWARE_LOADERS: Mutex<Vec<Box<dyn FirmwareLoader>>> = Mutex::new(Vec::new());
 

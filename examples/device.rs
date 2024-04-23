@@ -3,7 +3,7 @@ use tracing_subscriber::fmt::layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use redtooth::firmware::RealTekFirmwareLoader;
-use redtooth::hci::Host;
+use redtooth::hci::Hci;
 use redtooth::host::usb::UsbController;
 
 #[tokio::main]
@@ -12,14 +12,14 @@ async fn main() -> anyhow::Result<()> {
         .with(layer().without_time())
         .init();
 
-    Host::register_firmware_loader(RealTekFirmwareLoader::new());
+    Hci::register_firmware_loader(RealTekFirmwareLoader::new());
 
     let usb = UsbController::list(|info| info.vendor_id() == 0x2B89)?
         .next()
         .context("failed to find device")?
         .claim()?;
 
-    let _host = Host::new(usb).await?;
+    let _host = Hci::new(usb).await?;
 
 
 
