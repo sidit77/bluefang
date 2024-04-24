@@ -7,6 +7,9 @@ use num_enum::{FromPrimitive, IntoPrimitive};
 
 pub use events::*;
 pub use class_of_device::*;
+use crate::hci::buffer::ReceiveBuffer;
+use crate::hci::Error;
+use crate::hci::events::FromEvent;
 
 /// Bluetooth Core Specification versions ([Assigned Numbers] Section 2.1).
 #[derive(Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd, FromPrimitive, IntoPrimitive)]
@@ -104,5 +107,11 @@ impl From<[u8; 6]> for RemoteAddr {
 impl AsRef<[u8]> for RemoteAddr {
     fn as_ref(&self) -> &[u8] {
         &self.0
+    }
+}
+
+impl FromEvent for RemoteAddr {
+    fn unpack(buf: &mut ReceiveBuffer) -> Result<Self, Error> {
+        buf.bytes().map(Self::from)
     }
 }

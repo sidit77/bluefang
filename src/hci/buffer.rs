@@ -40,6 +40,11 @@ impl SendBuffer {
         self
     }
 
+    pub fn pad(&mut self, n: usize) -> &mut Self {
+        self.0.resize(self.0.len() + n, 0);
+        self
+    }
+
     /// Dummy method to end a chain with unit type
     /// Can be helpful with closures: `|b| b.put_u8(12).end()`
     pub fn end(&mut self) { }

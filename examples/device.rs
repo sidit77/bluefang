@@ -6,6 +6,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use redtooth::firmware::RealTekFirmwareLoader;
 use redtooth::hci::{Hci};
+use redtooth::hci::connection::handle_connection;
 use redtooth::hci::consts::{ClassOfDevice, MajorDeviceClass, MajorServiceClasses};
 use redtooth::host::usb::UsbController;
 
@@ -38,6 +39,8 @@ async fn main() -> anyhow::Result<()> {
         host.write_class_of_device(cod).await?;
         host.set_scan_enabled(true, true).await?;
         //host.inquiry(Lap::General, 5, 0).await?;
+
+        handle_connection(host.clone()).await?;
 
         tokio::signal::ctrl_c().await?;
     }

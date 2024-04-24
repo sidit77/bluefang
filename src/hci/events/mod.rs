@@ -1,36 +1,48 @@
+mod connection;
+mod inquiry;
+
 use std::collections::VecDeque;
 use std::mem::size_of;
 use parking_lot::Mutex;
-use smallvec::SmallVec;
-use tokio::sync::oneshot::{Receiver, Sender};
+use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, trace};
 use crate::ensure;
 use crate::hci::buffer::ReceiveBuffer;
 use crate::hci::commands::Opcode;
-use crate::hci::consts::{ClassOfDevice, EventCode, LinkType, RemoteAddr, Status};
+use crate::hci::connection::{ParsedConnectionEvent};
+use crate::hci::consts::{EventCode, Status};
 use crate::hci::Error;
 
 #[derive(Default)]
 pub struct EventRouter {
-    commands: Mutex<VecDeque<(Opcode, Sender<ReceiveBuffer>)>>
+    commands: Mutex<VecDeque<(Opcode, oneshot::Sender<ReceiveBuffer>)>>,
+    connection_manager: Mutex<Option<mpsc::Sender<ParsedConnectionEvent>>>,
 }
 
 impl EventRouter {
 
-    pub async fn reserve(&self, opcode: Opcode) -> Receiver<ReceiveBuffer> {
+    pub async fn reserve(&self, opcode: Opcode) -> oneshot::Receiver<ReceiveBuffer> {
         // TODO implement command quota
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (tx, rx) = oneshot::channel();
         self.commands.lock().push_back((opcode, tx));
         rx
     }
 
+    pub fn connection_events(&self) -> Option<mpsc::Receiver<ParsedConnectionEvent>> {
+        let mut manager = self.connection_manager.lock();
+        ensure!(manager.is_none() || manager.as_ref().is_some_and(mpsc::Sender::is_closed));
+        let (tx, rx) = mpsc::channel(16);
+        *manager = Some(tx);
+        Some(rx)
+    }
+
     pub fn handle_event(&self, data: &[u8]) -> Result<(), Error> {
         let (code, mut payload) = Self::parse_event(data)?;
-        match code {
-            EventCode::CommandComplete | EventCode::CommandStatus => {
+        match EventClass::from(code) {
+            EventClass::Command(event) => {
                 // ([Vol 4] Part E, Section 7.7.14).
                 // ([Vol 4] Part E, Section 7.7.15).
-                if code == EventCode::CommandStatus {
+                if let CommandEvent::Status = event {
                     payload.get_mut().rotate_left(size_of::<Status>());
                 }
                 let _cmd_quota = payload.u8()?;
@@ -43,56 +55,14 @@ impl EventRouter {
                     commands.remove(pos).unwrap()
                 };
                 tx.send(payload).unwrap_or_else(|_| debug!("CommandComplete receiver dropped"));
-
             },
-            EventCode::InquiryComplete => {
-                // ([Vol 4] Part E, Section 7.7.1).
-                let status = Status::from(payload.u8()?);
-                payload.finish()?;
-                debug!("Inquiry complete: {}", status);
-            },
-            EventCode::InquiryResult => {
-                // ([Vol 4] Part E, Section 7.7.2).
-                let count = payload.u8()? as usize;
-                let addr: SmallVec<[RemoteAddr; 2]> = (0..count)
-                    .map(|_| payload.bytes().map(RemoteAddr::from))
-                    .collect::<Result<_, _>>()?;
-                payload.skip(count * 3); // repetition mode
-                let classes: SmallVec<[ClassOfDevice; 2]> = (0..count)
-                    .map(|_| payload
-                        .u24()
-                        .map(ClassOfDevice::from))
-                    .collect::<Result<_, _>>()?;
-                payload.skip(count * 2); // clock offset
-                payload.finish()?;
-
-                for i in 0..count {
-                    debug!("Inquiry result: {} {:?}", addr[i], classes[i]);
-                }
-            },
-            EventCode::ConnectionComplete => {
-                // ([Vol 4] Part E, Section 7.7.3).
-                let status = payload.u8().map(Status::from)?;
-                let handle = payload.u16()?;
-                let addr = payload.bytes().map(RemoteAddr::from)?;
-                let link_type = payload.u8().map(LinkType::from)?;
-                let encryption_enabled = payload.u8().map(|b| b == 0x01)?;
-                payload.finish()?;
-                debug!("Connection complete: {} {} {:?} {} -> {}",
-                    status, addr, link_type, encryption_enabled, handle);
-            },
-            EventCode::ConnectionRequest => {
-                // ([Vol 4] Part E, Section 7.7.4).
-                let addr = payload.bytes().map(RemoteAddr::from)?;
-                let class = payload.u24().map(ClassOfDevice::from)?;
-                let link_type = payload.u8().map(LinkType::from)?;
-                payload.finish()?;
-                debug!("Connection request: {} {:?} {:?}", addr, class, link_type);
-            },
-            _ => debug!("HCI event: {:?} {:?}", code, payload),
+            EventClass::Connection(event) => self.handle_connection_events(event, payload)?,
+            EventClass::Inquiry(event) => self.handle_inquiry_event(event, payload)?,
+            EventClass::Unhandled(code) => debug!("Unhandled hci event: {:?} {:?}", code, payload),
         }
         Ok(())
     }
+
 
     /// HCI event packet ([Vol 4] Part E, Section 5.4.4).
     fn parse_event(data: &[u8]) -> Result<(EventCode, ReceiveBuffer), Error> {
@@ -122,4 +92,47 @@ impl FromEvent for u8 {
     fn unpack(buf: &mut ReceiveBuffer) -> Result<Self, Error> {
         buf.u8()
     }
+}
+
+enum EventClass {
+    Command(CommandEvent),
+    Connection(ConnectionEvent),
+    Inquiry(InquiryEvent),
+    Unhandled(EventCode),
+}
+
+impl From<EventCode> for EventClass {
+    fn from(value: EventCode) -> Self {
+        match value {
+            EventCode::CommandComplete => EventClass::Command(CommandEvent::Complete),
+            EventCode::CommandStatus => EventClass::Command(CommandEvent::Status),
+            EventCode::ConnectionComplete => EventClass::Connection(ConnectionEvent::ConnectionComplete),
+            EventCode::ConnectionRequest => EventClass::Connection(ConnectionEvent::ConnectionRequest),
+            EventCode::PinCodeRequest => EventClass::Connection(ConnectionEvent::PinCodeRequest),
+            EventCode::LinkKeyNotification => EventClass::Connection(ConnectionEvent::LinkKeyNotification),
+            EventCode::DisconnectionComplete => EventClass::Connection(ConnectionEvent::DisconnectionComplete),
+            EventCode::InquiryComplete => EventClass::Inquiry(InquiryEvent::Complete),
+            EventCode::InquiryResult => EventClass::Inquiry(InquiryEvent::Result),
+            other => EventClass::Unhandled(other),
+        }
+    }
+}
+
+pub enum CommandEvent {
+    Complete,
+    Status
+}
+
+#[derive(Debug)]
+pub enum ConnectionEvent {
+    ConnectionRequest,
+    ConnectionComplete,
+    PinCodeRequest,
+    LinkKeyNotification,
+    DisconnectionComplete,
+}
+
+pub enum InquiryEvent {
+    Complete,
+    Result,
 }

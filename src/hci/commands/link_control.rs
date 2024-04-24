@@ -29,6 +29,8 @@ impl Hci {
         Ok(())
     }
 
+    /// Reject a connection request from a remote device.
+    /// ([Vol 4] Part E, Section 7.1.9).
     pub async fn reject_connection_request(&self, bd_addr: RemoteAddr, reason: Status) -> Result<(), Error> {
         assert!(matches!(reason, Status::ConnectionRejectedDueToLimitedResources | Status::ConnectionRejectedDueToSecurityReasons | Status::ConnectionRejectedDueToUnacceptableBdAddr));
         self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x000A), |p| {
@@ -37,5 +39,16 @@ impl Hci {
         }).await?;
         Ok(())
     }
+
+    pub async fn pin_code_request_reply(&self, bd_addr: RemoteAddr, pin: &str) -> Result<RemoteAddr, Error> {
+        assert!(pin.len() <= 16);
+        self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x000D), |p| {
+            p.bytes(bd_addr.as_ref());
+            p.u8(pin.len() as u8);
+            p.bytes(pin.as_bytes());
+            p.pad(16 - pin.len());
+        }).await
+    }
+
 }
 
