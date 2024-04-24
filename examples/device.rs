@@ -5,7 +5,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use redtooth::firmware::RealTekFirmwareLoader;
 use redtooth::hci::{Hci};
-use redtooth::hci::consts::Lap;
+use redtooth::hci::consts::{ClassOfDevice, Lap, MajorDeviceClass, MajorServiceClasses};
 use redtooth::host::usb::UsbController;
 
 #[tokio::main]
@@ -21,6 +21,14 @@ async fn main() -> anyhow::Result<()> {
         .next()
         .context("failed to find device")?
         .claim()?;
+
+
+    let cod = ClassOfDevice {
+        major_service_classes: MajorServiceClasses::Audio | MajorServiceClasses::Rendering,
+        major_device_classes: MajorDeviceClass::AudioVideo,
+        minor_device_classes: 8,
+    };
+    println!("Class of Device: {:?}", cod);
 
     let host = Hci::new(usb).await?;
     host.inquiry(Lap::General, 5, 0).await?;

@@ -1,6 +1,7 @@
 mod iter;
 mod bytes;
 
+use std::fmt::{Debug, Formatter};
 pub use iter::IteratorExt;
 pub use bytes::SliceExt;
 
@@ -16,4 +17,12 @@ macro_rules! ensure {
             return Err($err.into());
         }
     };
+}
+
+pub struct DebugFn<F: Fn(&mut Formatter<'_>) -> std::fmt::Result>(pub F);
+
+impl<F: Fn(&mut Formatter<'_>) -> std::fmt::Result> Debug for DebugFn<F> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        (self.0)(f)
+    }
 }

@@ -15,6 +15,7 @@ impl Hci {
             p.u8(time);
             p.u8(max_responses);
         }).await?;
+        // TODO return channel for inquiry results
         Ok(())
     }
 }
