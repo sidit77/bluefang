@@ -26,12 +26,16 @@ async fn main() -> anyhow::Result<()> {
     let cod = ClassOfDevice {
         major_service_classes: MajorServiceClasses::Audio | MajorServiceClasses::Rendering,
         major_device_classes: MajorDeviceClass::AudioVideo,
-        minor_device_classes: 8,
+        minor_device_classes: 4,
     };
+    //let cod = ClassOfDevice::from(2360324);
     println!("Class of Device: {:?}", cod);
 
     let host = Hci::new(usb).await?;
-    host.inquiry(Lap::General, 5, 0).await?;
+    host.write_local_name("redtest").await?;
+    host.write_class_of_device(cod).await?;
+    host.set_scan_enabled(true, true).await?;
+    //host.inquiry(Lap::General, 5, 0).await?;
 
 
     tokio::signal::ctrl_c().await?;

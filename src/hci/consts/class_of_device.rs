@@ -28,8 +28,16 @@ impl From<u32> for ClassOfDevice {
         Self {
             major_service_classes: MajorServiceClasses::from_bits_truncate((value >> 13) as u16),
             major_device_classes: MajorDeviceClass::from(((value >> 8) & 0x1F) as u8),
-            minor_device_classes: ((value >> 7) & 0xFE) as u8,
+            minor_device_classes: (value & 0xFF) as u8,
         }
+    }
+}
+
+impl From<ClassOfDevice> for u32 {
+    fn from(value: ClassOfDevice) -> Self {
+        (value.major_service_classes.bits() as u32) << 13 |
+            (value.major_device_classes as u32) << 8 |
+            (value.minor_device_classes as u32)
     }
 }
 
