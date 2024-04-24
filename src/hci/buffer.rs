@@ -82,31 +82,40 @@ impl ReceiveBuffer {
         }
     }
 
-    pub fn get_u8(&mut self) -> Option<u8> {
-        let value = self.data.get(self.index).copied();
+    pub fn u8(&mut self) -> Result<u8, Error> {
+        let value = self.data.get(self.index).copied().ok_or(Error::BadEventPacketSize)?;
         self.index += 1;
-        value
+        Ok(value)
     }
 
-    pub fn get_u16(&mut self) -> Option<u16> {
+    pub fn u16(&mut self) -> Result<u16, Error> {
         let value = self.data.get_chunk(self.index)
-            .map(|bytes| u16::from_le_bytes(*bytes));
+            .map(|bytes| u16::from_le_bytes(*bytes))
+            .ok_or(Error::BadEventPacketSize)?;
         self.index += 2;
-        value
+        Ok(value)
     }
 
-    pub fn get_u24(&mut self) -> Option<u32> {
+    pub fn u24(&mut self) -> Result<u32, Error> {
         let value = self.data.get_chunk::<3>(self.index)
-            .map(|b| (b[2] as u32) | ((b[1] as u32) << 8) | ((b[0] as u32) << 16));
+            .map(|b| (b[2] as u32) | ((b[1] as u32) << 8) | ((b[0] as u32) << 16))
+            .ok_or(Error::BadEventPacketSize)?;
         self.index += 3;
-        value
+        Ok(value)
     }
 
-    pub fn get_bytes<const N: usize>(&mut self) -> Option<[u8; N]> {
+    pub fn bytes<const N: usize>(&mut self) -> Result<[u8; N], Error> {
         let value = self.data.get_chunk(self.index)
-            .copied();
+            .copied()
+            .ok_or(Error::BadEventPacketSize)?;
         self.index += N;
-        value
+        Ok(value)
+    }
+
+    pub fn finish(self) -> Result<(), Error> {
+        (self.remaining() == 0)
+            .then_some(())
+            .ok_or(Error::BadEventPacketSize)
     }
 
     pub fn skip(&mut self, n: usize) {

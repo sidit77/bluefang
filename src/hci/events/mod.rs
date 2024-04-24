@@ -7,7 +7,7 @@ use tracing::{debug, trace};
 use crate::ensure;
 use crate::hci::buffer::ReceiveBuffer;
 use crate::hci::commands::Opcode;
-use crate::hci::consts::{ClassOfDevice, EventCode, Status};
+use crate::hci::consts::{ClassOfDevice, EventCode, LinkType, RemoteAddr, Status};
 use crate::hci::Error;
 
 #[derive(Default)]
@@ -33,8 +33,8 @@ impl EventRouter {
                 if code == EventCode::CommandStatus {
                     payload.get_mut().rotate_left(size_of::<Status>());
                 }
-                let (_cmd_quota, opcode) = Option::zip(payload.get_u8(), payload.get_u16().map(Opcode::from))
-                    .ok_or(Error::BadEventPacketSize)?;
+                let _cmd_quota = payload.u8()?;
+                let opcode= payload.u16().map(Opcode::from)?;
                 trace!("Received CommandComplete for {:?}", opcode);
                 let (_, tx) = {
                     let mut commands = self.commands.lock();
@@ -47,30 +47,48 @@ impl EventRouter {
             },
             EventCode::InquiryComplete => {
                 // ([Vol 4] Part E, Section 7.7.1).
-                let status = Status::from(payload.get_u8().ok_or(Error::BadEventPacketSize)?);
-                ensure!(payload.remaining() == 0, Error::BadEventPacketSize);
+                let status = Status::from(payload.u8()?);
+                payload.finish()?;
                 debug!("Inquiry complete: {}", status);
             },
             EventCode::InquiryResult => {
                 // ([Vol 4] Part E, Section 7.7.2).
-                let count = payload.get_u8().ok_or(Error::BadEventPacketSize)? as usize;
-                let addr: SmallVec<[[u8;6]; 2]> = (0..count)
-                    .map(|_| payload.get_bytes::<6>().ok_or(Error::BadEventPacketSize))
+                let count = payload.u8()? as usize;
+                let addr: SmallVec<[RemoteAddr; 2]> = (0..count)
+                    .map(|_| payload.bytes().map(RemoteAddr::from))
                     .collect::<Result<_, _>>()?;
                 payload.skip(count * 3); // repetition mode
                 let classes: SmallVec<[ClassOfDevice; 2]> = (0..count)
                     .map(|_| payload
-                        .get_u24()
-                        .map(ClassOfDevice::from)
-                        .ok_or(Error::BadEventPacketSize))
+                        .u24()
+                        .map(ClassOfDevice::from))
                     .collect::<Result<_, _>>()?;
                 payload.skip(count * 2); // clock offset
-                ensure!(payload.remaining() == 0, Error::BadEventPacketSize);
+                payload.finish()?;
 
                 for i in 0..count {
-                    debug!("Inquiry result: {:X?} {:?}", addr[i], classes[i]);
+                    debug!("Inquiry result: {} {:?}", addr[i], classes[i]);
                 }
-            }
+            },
+            EventCode::ConnectionComplete => {
+                // ([Vol 4] Part E, Section 7.7.3).
+                let status = payload.u8().map(Status::from)?;
+                let handle = payload.u16()?;
+                let addr = payload.bytes().map(RemoteAddr::from)?;
+                let link_type = payload.u8().map(LinkType::from)?;
+                let encryption_enabled = payload.u8().map(|b| b == 0x01)?;
+                payload.finish()?;
+                debug!("Connection complete: {} {} {:?} {} -> {}",
+                    status, addr, link_type, encryption_enabled, handle);
+            },
+            EventCode::ConnectionRequest => {
+                // ([Vol 4] Part E, Section 7.7.4).
+                let addr = payload.bytes().map(RemoteAddr::from)?;
+                let class = payload.u24().map(ClassOfDevice::from)?;
+                let link_type = payload.u8().map(LinkType::from)?;
+                payload.finish()?;
+                debug!("Connection request: {} {:?} {:?}", addr, class, link_type);
+            },
             _ => debug!("HCI event: {:?} {:?}", code, payload),
         }
         Ok(())
@@ -91,17 +109,17 @@ impl EventRouter {
 }
 
 pub trait FromEvent: Sized {
-    fn unpack(buf: &mut ReceiveBuffer) -> Option<Self>;
+    fn unpack(buf: &mut ReceiveBuffer) -> Result<Self, Error>;
 }
 
 impl FromEvent for () {
-    fn unpack(_: &mut ReceiveBuffer) -> Option<Self> {
-        Some(())
+    fn unpack(_: &mut ReceiveBuffer) -> Result<Self, Error> {
+        Ok(())
     }
 }
 
 impl FromEvent for u8 {
-    fn unpack(buf: &mut ReceiveBuffer) -> Option<Self> {
-        buf.get_u8()
+    fn unpack(buf: &mut ReceiveBuffer) -> Result<Self, Error> {
+        buf.u8()
     }
 }

@@ -1,5 +1,5 @@
 use std::fmt::{Display, Formatter};
-use num_enum::{TryFromPrimitive, FromPrimitive};
+use num_enum::{TryFromPrimitive, FromPrimitive, IntoPrimitive};
 
 /// HCI event codes ([Vol 4] Part E, Section 7.7).
 #[derive(Debug, Copy, Clone, Eq, PartialEq, TryFromPrimitive)]
@@ -73,7 +73,7 @@ pub enum EventCode {
 }
 
 /// HCI status codes ([Vol 1] Part F, Section 1.3).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, FromPrimitive)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, FromPrimitive, IntoPrimitive)]
 #[non_exhaustive]
 #[repr(u8)]
 pub enum Status {

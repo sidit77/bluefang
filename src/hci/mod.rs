@@ -14,7 +14,6 @@ use parking_lot::Mutex;
 use tokio::spawn;
 use tokio::task::JoinHandle;
 use tracing::{debug, error};
-use crate::ensure;
 use crate::host::usb::UsbHost;
 use crate::hci::buffer::SendBuffer;
 use crate::hci::events::{EventRouter, FromEvent};
@@ -105,11 +104,11 @@ impl Hci {
 
         //TODO: 1s timeout
         let mut resp = rx.await.expect("Message handler dropped");
-        let status = Status::from(resp.get_u8().ok_or(Error::BadEventPacketSize)?);
+        let status = Status::from(resp.u8()?);
         match status {
             Status::Success => {
-                let result = T::unpack(&mut resp).ok_or(Error::BadEventPacketSize)?;
-                ensure!(resp.remaining() == 0, Error::BadEventPacketSize);
+                let result = T::unpack(&mut resp)?;
+                resp.finish()?;
                 Ok(result)
             }
             _ => Err(Error::Controller(status))

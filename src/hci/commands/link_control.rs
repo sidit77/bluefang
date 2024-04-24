@@ -1,5 +1,5 @@
 use crate::hci::{Error, Hci, Opcode, OpcodeGroup};
-use crate::hci::consts::Lap;
+use crate::hci::consts::{Lap, RemoteAddr, Role, Status};
 
 impl Hci {
 
@@ -16,6 +16,25 @@ impl Hci {
             p.u8(max_responses);
         }).await?;
         // TODO return channel for inquiry results
+        Ok(())
+    }
+
+    /// Accept a connection request from a remote device.
+    /// ([Vol 4] Part E, Section 7.1.8).
+    pub async fn accept_connection_request(&self, bd_addr: RemoteAddr, role: Role) -> Result<(), Error> {
+        self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x0009), |p| {
+            p.bytes(bd_addr.as_ref());
+            p.u8(role);
+        }).await?;
+        Ok(())
+    }
+
+    pub async fn reject_connection_request(&self, bd_addr: RemoteAddr, reason: Status) -> Result<(), Error> {
+        assert!(matches!(reason, Status::ConnectionRejectedDueToLimitedResources | Status::ConnectionRejectedDueToSecurityReasons | Status::ConnectionRejectedDueToUnacceptableBdAddr));
+        self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x000A), |p| {
+            p.bytes(bd_addr.as_ref());
+            p.u8(reason);
+        }).await?;
         Ok(())
     }
 }

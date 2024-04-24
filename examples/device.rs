@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use anyhow::Context;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::layer;
@@ -5,7 +6,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use redtooth::firmware::RealTekFirmwareLoader;
 use redtooth::hci::{Hci};
-use redtooth::hci::consts::{ClassOfDevice, Lap, MajorDeviceClass, MajorServiceClasses};
+use redtooth::hci::consts::{ClassOfDevice, MajorDeviceClass, MajorServiceClasses};
 use redtooth::host::usb::UsbController;
 
 #[tokio::main]
@@ -31,15 +32,16 @@ async fn main() -> anyhow::Result<()> {
     //let cod = ClassOfDevice::from(2360324);
     println!("Class of Device: {:?}", cod);
 
-    let host = Hci::new(usb).await?;
-    host.write_local_name("redtest").await?;
-    host.write_class_of_device(cod).await?;
-    host.set_scan_enabled(true, true).await?;
-    //host.inquiry(Lap::General, 5, 0).await?;
+    let host = Arc::new(Hci::new(usb).await?);
+    {
+        host.write_local_name("redtest").await?;
+        host.write_class_of_device(cod).await?;
+        host.set_scan_enabled(true, true).await?;
+        //host.inquiry(Lap::General, 5, 0).await?;
 
-
-    tokio::signal::ctrl_c().await?;
-
+        tokio::signal::ctrl_c().await?;
+    }
+    host.reset().await?;
     Ok(())
 
 }

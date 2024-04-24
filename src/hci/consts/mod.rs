@@ -2,7 +2,7 @@
 mod events;
 mod class_of_device;
 
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use num_enum::{FromPrimitive, IntoPrimitive};
 
 pub use events::*;
@@ -67,3 +67,42 @@ pub enum Lap {
     General = 0x9E8B33,
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq, FromPrimitive)]
+#[repr(u8)]
+pub enum LinkType {
+    Sco = 0x00,
+    Acl = 0x01,
+    ESco = 0x02,
+    #[num_enum(default)]
+    Unknown = 0xFF
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, IntoPrimitive)]
+#[repr(u8)]
+pub enum Role {
+    Master = 0x00,
+    Slave = 0x01,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct RemoteAddr([u8; 6]);
+
+impl Display for RemoteAddr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+               self.0[5], self.0[4], self.0[3], self.0[2], self.0[1], self.0[0])
+    }
+
+}
+
+impl From<[u8; 6]> for RemoteAddr {
+    fn from(addr: [u8; 6]) -> Self {
+        Self(addr)
+    }
+}
+
+impl AsRef<[u8]> for RemoteAddr {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}

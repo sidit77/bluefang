@@ -37,8 +37,8 @@ impl Default for SupportedCommands {
 impl FromEvent for SupportedCommands {
 
     #[inline]
-    fn unpack(buf: &mut ReceiveBuffer) -> Option<Self> {
-        buf.get_bytes().map(Self)
+    fn unpack(buf: &mut ReceiveBuffer) -> Result<Self, Error> {
+        buf.bytes().map(Self)
     }
 }
 
@@ -55,13 +55,13 @@ pub struct LocalVersion {
 
 impl FromEvent for LocalVersion {
     #[inline]
-    fn unpack(buf: &mut ReceiveBuffer) -> Option<Self> {
-        Some(Self {
-            hci_version: CoreVersion::from(buf.get_u8()?),
-            hci_subversion: buf.get_u16()?,
-            lmp_version: CoreVersion::from(buf.get_u8()?),
-            company_id: CompanyId(buf.get_u16()?),
-            lmp_subversion: buf.get_u16()?,
+    fn unpack(buf: &mut ReceiveBuffer) -> Result<Self, Error> {
+        Ok(Self {
+            hci_version: CoreVersion::from(buf.u8()?),
+            hci_subversion: buf.u16()?,
+            lmp_version: CoreVersion::from(buf.u8()?),
+            company_id: CompanyId(buf.u16()?),
+            lmp_subversion: buf.u16()?,
         })
     }
 }
