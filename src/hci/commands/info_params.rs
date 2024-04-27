@@ -19,6 +19,33 @@ impl Hci {
         self.call(Opcode::new(OpcodeGroup::InfoParams, 0x0002)).await
     }
 
+    /// Reads the maximum size of the data packets that the host can send to the controller
+    /// ([Vol 4] Part E, Section 7.4.5).
+    pub async fn read_buffer_size(&self) -> Result<BufferSizes, Error> {
+        self.call(Opcode::new(OpcodeGroup::InfoParams, 0x0005)).await
+    }
+
+}
+
+/// `HCI_Read_Buffer_Size` return parameters
+/// ([Vol 4] Part E, Section 7.4.5).
+#[derive(Clone, Copy, Debug)]
+pub struct BufferSizes {
+    pub acl_data_packet_length: u16,
+    pub synchronous_data_packet_length: u8,
+    pub total_num_acl_data_packets: u16,
+    pub total_num_synchronous_data_packets: Option<u16>,
+}
+
+impl FromEvent for BufferSizes {
+    fn unpack(buf: &mut ReceiveBuffer) -> Result<Self, Error> {
+        Ok(Self {
+            acl_data_packet_length: buf.u16()?,
+            synchronous_data_packet_length: buf.u8()?,
+            total_num_acl_data_packets: buf.u16()?,
+            total_num_synchronous_data_packets: Some(buf.u16()?).filter(|&n| n > 0)
+        })
+    }
 }
 
 /// `HCI_Read_Local_Supported_Commands` return parameter

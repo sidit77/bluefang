@@ -10,7 +10,7 @@ use std::mem::size_of;
 use std::pin::Pin;
 use std::sync::{Arc};
 use std::time::Duration;
-use nusb::transfer::{ControlOut, ControlType, Recipient, RequestBuffer};
+use nusb::transfer::{ControlOut, ControlType, Queue, Recipient, RequestBuffer};
 use parking_lot::Mutex;
 use tokio::spawn;
 use tokio::task::JoinHandle;
@@ -21,7 +21,6 @@ use crate::hci::events::{EventRouter, FromEvent};
 use crate::hci::consts::Status;
 
 pub use commands::*;
-
 
 
 const MAX_HCI_EVENT_SIZE: usize = 1 + size_of::<u8>() + u8::MAX as usize;
@@ -56,6 +55,21 @@ impl Hci {
         debug!("{:?}", hci.read_local_supported_commands().await?);
 
         Ok(hci)
+    }
+
+    pub async fn acl(&self) -> Result<(Queue<RequestBuffer>, Queue<Vec<u8>>), Error> {
+        let buffer_sizes = self.read_buffer_size().await?;
+        debug!("{:?}", buffer_sizes);
+        let mut acl_in = self.transport.interface.bulk_in_queue(self.transport.endpoints.acl_in);
+        //TODO: idk why 5
+        for _ in 0..5 {
+            acl_in.submit(RequestBuffer::new(buffer_sizes.acl_data_packet_length as usize));
+        }
+        let acl_out = self.transport.interface.bulk_out_queue(self.transport.endpoints.acl_out);
+        //for _ in 0..buffer_sizes.total_num_acl_data_packets {
+        //    acl_out.submit(vec![0; buffer_sizes.acl_data_packet_length as usize]);
+        //}
+        Ok((acl_in, acl_out))
     }
 
     fn event_loop(transport: &UsbHost, router: Arc<EventRouter>) -> impl Future<Output=()> {
