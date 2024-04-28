@@ -4,6 +4,7 @@ mod buffer;
 mod events;
 mod commands;
 pub mod connection;
+pub mod acl;
 
 use std::future::Future;
 use std::mem::size_of;

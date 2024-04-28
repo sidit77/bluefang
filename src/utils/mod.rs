@@ -19,6 +19,15 @@ macro_rules! ensure {
     };
 }
 
+#[macro_export]
+macro_rules! log_assert {
+    ($cond:expr) => {
+        if !($cond) {
+            tracing::warn!("Assertion failed: {}", stringify!($cond));
+        }
+    };
+}
+
 pub struct DebugFn<F: Fn(&mut Formatter<'_>) -> std::fmt::Result>(pub F);
 
 impl<F: Fn(&mut Formatter<'_>) -> std::fmt::Result> Debug for DebugFn<F> {

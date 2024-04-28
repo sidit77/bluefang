@@ -3,19 +3,25 @@ use nusb::transfer::{Queue, RequestBuffer, TransferError};
 use smallvec::SmallVec;
 use tracing::{debug, error, warn};
 use crate::ensure;
+use crate::hci::acl::AclDataPacket;
+use crate::hci::connection::CONNECTIONS;
 use crate::utils::SliceExt;
 
 pub async fn do_l2cap(mut acl_in: Queue<RequestBuffer>, mut acl_out: Queue<Vec<u8>>) {
     loop {
         let data = acl_in.next_complete().await;
         match data.status {
-            Ok(_) => match handle_acl_packet(&data.data) {
-                Ok(None) => {}
-                Ok(Some(reply)) => {
-                    debug!("Sending reply...");
-                    //TODO wait if there are too many packets in the queue
-                    acl_out.submit(reply.as_ref().to_vec());
-                },
+            //Ok(_) => match handle_acl_packet(&data.data) {
+            //    Ok(None) => {}
+            //    Ok(Some(reply)) => {
+            //        debug!("Sending reply...");
+            //        //TODO wait if there are too many packets in the queue
+            //        acl_out.submit(reply.as_ref().to_vec());
+            //    },
+            //    Err(err) => warn!("Error handling ACL packet: {:?}", err),
+            //},
+            Ok(_) => match handle_acl_packet2(&data.data) {
+                Ok(_) => {}
                 Err(err) => warn!("Error handling ACL packet: {:?}", err),
             },
             Err(err) => warn!("Error reading ACL data: {:?}", err),
@@ -25,26 +31,15 @@ pub async fn do_l2cap(mut acl_in: Queue<RequestBuffer>, mut acl_out: Queue<Vec<u
     }
 }
 
-// ([Vol 4] Part E, Section 5.4.2).
-pub fn handle_acl_packet(data: &[u8]) -> Result<Option<ReplyPacket>, Error> {
+pub fn handle_acl_packet2(data: &[u8]) -> Result<(), Error> {
     debug!("ACL packet: {:02X?}", data);
-    let hdr = u16::from_le_bytes(*data.get_chunk(0).ok_or(Error::BadPacket)?);
-    let handle = hdr & 0xFFF;
-    let pb = (hdr >> 12) & 0b11;
-    let bc = (hdr >> 14) & 0b11;
-    let len = u16::from_le_bytes(*data.get_chunk(2).ok_or(Error::BadPacket)?) as usize;
-    let data = &data[4..];
-    ensure!(data.len() == len, Error::BadPacket);
-
-    debug!("  ACL header: handle={:X} pb={:02b} bc={:02b}", handle, pb, bc);
-    Ok(handle_l2cap_packet(data)?
-        .map(|mut reply| {
-            let len = reply.len() as u16;
-            reply.prepend(len.to_le_bytes());
-            reply.prepend(handle.to_le_bytes());
-            reply
-        }))
-
+    let packet = AclDataPacket::from_bytes(data)?;
+    let mut connections = CONNECTIONS.lock();
+    let connection = connections.get_mut(&packet.handle).ok_or(Error::UnknownConnection)?;
+    if let Some(pdu) = connection.assembler.push(packet) {
+        handle_l2cap_packet(pdu)?;
+    }
+    Ok(())
 }
 
 // ([Vol 3] Part A, Section 3.1).
@@ -228,4 +223,6 @@ pub enum Error {
     TransferError(#[from] TransferError),
     #[error("Malformed packet")]
     BadPacket,
+    #[error("Unknown connection")]
+    UnknownConnection,
 }
