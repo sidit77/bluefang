@@ -1,47 +1,56 @@
 pub mod consts;
 mod error;
-mod buffer;
-mod events;
+pub mod buffer;
+pub mod events;
 mod commands;
-pub mod connection;
+// pub mod connection;
 pub mod acl;
+mod event_loop;
+pub mod connection;
 
+use std::collections::BTreeSet;
 use std::future::Future;
-use std::mem::size_of;
 use std::pin::Pin;
-use std::sync::{Arc};
 use std::time::Duration;
-use nusb::transfer::{ControlOut, ControlType, Queue, Recipient, RequestBuffer};
+use nusb::transfer::TransferError;
 use parking_lot::Mutex;
 use tokio::spawn;
 use tokio::task::JoinHandle;
 use tracing::{debug, error};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedSender as MpscSender};
+use tokio::sync::oneshot::Sender as OneshotSender;
+use tokio::time::sleep;
 use crate::host::usb::UsbHost;
-use crate::hci::buffer::SendBuffer;
-use crate::hci::events::{EventRouter, FromEvent};
-use crate::hci::consts::Status;
+use crate::hci::buffer::{ReceiveBuffer, SendBuffer};
+use crate::hci::events::{FromEvent};
+use crate::hci::consts::{EventCode, Status};
 
 pub use commands::*;
+use crate::hci::acl::AclDataPacket;
+use crate::hci::event_loop::{Event, EventLoopCommand};
 
-
-const MAX_HCI_EVENT_SIZE: usize = 1 + size_of::<u8>() + u8::MAX as usize;
-const HCI_EVENT_QUEUE_SIZE: usize = 4;
 
 //TODO make generic over transport
 pub struct Hci {
-    transport: UsbHost,
-    router: Arc<EventRouter>,
-    event_loop: JoinHandle<()>
+    //transport: UsbHost,
+    //router: Arc<EventRouter>,
+    cmd_out: MpscSender<(Opcode, SendBuffer, OneshotSender<Result<ReceiveBuffer, TransferError>>)>,
+    acl_out: MpscSender<AclDataPacket>,
+    ctl_out: MpscSender<EventLoopCommand>,
+    event_loop: Mutex<Option<JoinHandle<()>>>
 }
 
 impl Hci {
     pub async fn new(transport: UsbHost) -> Result<Self, Error> {
-        let router = Arc::new(EventRouter::default());
-        let event_loop = spawn(Self::event_loop(&transport, router.clone()));
-        let hci = Hci {
-            transport,
-            router,
-            event_loop,
+        let (acl_out, acl_in) = unbounded_channel();
+        let (cmd_out, cmd_in) = unbounded_channel();
+        let (ctl_out, ctl_in) = unbounded_channel();
+        let event_loop = spawn(event_loop::event_loop(transport, cmd_in, acl_in, ctl_in));
+        let hci = Self {
+            cmd_out,
+            acl_out,
+            ctl_out,
+            event_loop: Mutex::new(Some(event_loop))
         };
 
         // Reset after allowing the event loop to discard any unexpected events
@@ -55,41 +64,26 @@ impl Hci {
 
         debug!("{:?}", hci.read_local_supported_commands().await?);
 
+        debug!("{:?}", hci.read_buffer_size().await?);
+
         Ok(hci)
     }
 
-    pub async fn acl(&self) -> Result<(Queue<RequestBuffer>, Queue<Vec<u8>>), Error> {
-        let buffer_sizes = self.read_buffer_size().await?;
-        debug!("{:?}", buffer_sizes);
-        let mut acl_in = self.transport.interface.bulk_in_queue(self.transport.endpoints.acl_in);
-        //TODO: idk why 5
-        for _ in 0..5 {
-            acl_in.submit(RequestBuffer::new(buffer_sizes.acl_data_packet_length as usize));
-        }
-        let acl_out = self.transport.interface.bulk_out_queue(self.transport.endpoints.acl_out);
-        //for _ in 0..buffer_sizes.total_num_acl_data_packets {
-        //    acl_out.submit(vec![0; buffer_sizes.acl_data_packet_length as usize]);
-        //}
-        Ok((acl_in, acl_out))
+    pub fn register_event_handler(&self, events: impl Into<BTreeSet<EventCode>>, handler: MpscSender<Event>) -> Result<(), Error> {
+        let events = events.into();
+        debug_assert!(!events.is_empty());
+        debug_assert!(!events.contains(&EventCode::CommandComplete));
+        debug_assert!(!events.contains(&EventCode::CommandStatus));
+        self.ctl_out.send(EventLoopCommand::RegisterHciEventHandler {
+            events,
+            handler
+        }).map_err(|_| Error::EventLoopClosed)
     }
 
-    fn event_loop(transport: &UsbHost, router: Arc<EventRouter>) -> impl Future<Output=()> {
-        let mut events = transport.interface.interrupt_in_queue(transport.endpoints.event);
-        for _ in 0..HCI_EVENT_QUEUE_SIZE {
-            events.submit(RequestBuffer::new(MAX_HCI_EVENT_SIZE));
-        }
-        async move {
-            loop {
-                let event = events.next_complete().await;
-                match event.status {
-                    Ok(_) => router
-                        .handle_event(&event.data)
-                        .unwrap_or_else(|err| error!("Error handling event: {:?} ({:?})", err, event.data)),
-                    Err(err) => error!("Error reading HCI event: {:?}", err),
-                }
-                events.submit(RequestBuffer::reuse(event.data, MAX_HCI_EVENT_SIZE));
-            }
-        }
+    pub fn register_data_handler(&self, handler: MpscSender<AclDataPacket>) -> Result<(), Error> {
+        self.ctl_out.send(EventLoopCommand::RegisterAclDataHandler {
+            handler
+        }).map_err(|_| Error::EventLoopClosed)
     }
 
     pub async fn call<T: FromEvent>(&self, cmd: Opcode) -> Result<T, Error> {
@@ -100,26 +94,15 @@ impl Hci {
         // TODO: check if the command is supported
         let mut buf = SendBuffer::default();
         buf.u16(cmd);
-        // we'll update this later
         buf.u8(0);
         packer(&mut buf);
         let payload_len = u8::try_from(buf.len() - 3).map_err(|_| Error::PayloadTooLarge)?;
         buf.set_u8(2, payload_len);
 
-        let rx = self.router.reserve(cmd).await;
-
-        let cmd = self.transport.interface.control_out(ControlOut {
-            control_type: ControlType::Class,
-            recipient: Recipient::Interface,
-            request: 0x00,
-            value: 0x00,
-            index: self.transport.endpoints.main_iface.into(),
-            data: buf.data(),
-        }).await;
-        cmd.status?;
-
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.cmd_out.send((cmd, buf, tx)).map_err(|_| Error::EventLoopClosed)?;
         //TODO: 1s timeout
-        let mut resp = rx.await.expect("Message handler dropped");
+        let mut resp = rx.await.map_err(|_| Error::EventLoopClosed)??;
         let status = Status::from(resp.u8()?);
         match status {
             Status::Success => {
@@ -131,13 +114,25 @@ impl Hci {
         }
     }
 
+    pub async fn shutdown(&self) -> Result<(), Error> {
+        if let Some(event_loop) = self.event_loop.lock().take() {
+            self.reset().await?;
+            self.ctl_out.send(EventLoopCommand::Shutdown).map_err(|_| Error::EventLoopClosed)?;
+            event_loop.await.unwrap();
+            sleep(Duration::from_millis(100)).await;
+        } else {
+            error!("Another thread already called shutdown");
+        }
+        Ok(())
+    }
+
 }
 
-impl Drop for Hci {
-    fn drop(&mut self) {
-        self.event_loop.abort();
-    }
-}
+//impl Drop for Hci {
+//    fn drop(&mut self) {
+//        self.event_loop.abort();
+//    }
+//}
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -152,6 +147,8 @@ pub enum Error {
     PayloadTooLarge,
     #[error("HCI Event has an invalid size")]
     BadEventPacketSize,
+    #[error("Event loop closed")]
+    EventLoopClosed,
     #[error("Unkown HCI Event code: 0x{0:02X}")]
     UnknownEventCode(u8),
     #[error("Unexpected HCI Command Response for {0:?}")]

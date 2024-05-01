@@ -1,18 +1,9 @@
-mod connection;
-mod inquiry;
 
-use std::collections::VecDeque;
-use std::mem::size_of;
-use parking_lot::Mutex;
-use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, trace};
-use crate::ensure;
+
 use crate::hci::buffer::ReceiveBuffer;
-use crate::hci::commands::Opcode;
-use crate::hci::connection::{ParsedConnectionEvent};
-use crate::hci::consts::{EventCode, Status};
 use crate::hci::Error;
 
+/*
 #[derive(Default)]
 pub struct EventRouter {
     commands: Mutex<VecDeque<(Opcode, oneshot::Sender<ReceiveBuffer>)>>,
@@ -78,6 +69,8 @@ impl EventRouter {
     }
 }
 
+ */
+
 pub trait FromEvent: Sized {
     fn unpack(buf: &mut ReceiveBuffer) -> Result<Self, Error>;
 }
@@ -94,45 +87,3 @@ impl FromEvent for u8 {
     }
 }
 
-enum EventClass {
-    Command(CommandEvent),
-    Connection(ConnectionEvent),
-    Inquiry(InquiryEvent),
-    Unhandled(EventCode),
-}
-
-impl From<EventCode> for EventClass {
-    fn from(value: EventCode) -> Self {
-        match value {
-            EventCode::CommandComplete => EventClass::Command(CommandEvent::Complete),
-            EventCode::CommandStatus => EventClass::Command(CommandEvent::Status),
-            EventCode::ConnectionComplete => EventClass::Connection(ConnectionEvent::ConnectionComplete),
-            EventCode::ConnectionRequest => EventClass::Connection(ConnectionEvent::ConnectionRequest),
-            EventCode::PinCodeRequest => EventClass::Connection(ConnectionEvent::PinCodeRequest),
-            EventCode::LinkKeyNotification => EventClass::Connection(ConnectionEvent::LinkKeyNotification),
-            EventCode::DisconnectionComplete => EventClass::Connection(ConnectionEvent::DisconnectionComplete),
-            EventCode::InquiryComplete => EventClass::Inquiry(InquiryEvent::Complete),
-            EventCode::InquiryResult => EventClass::Inquiry(InquiryEvent::Result),
-            other => EventClass::Unhandled(other),
-        }
-    }
-}
-
-pub enum CommandEvent {
-    Complete,
-    Status
-}
-
-#[derive(Debug)]
-pub enum ConnectionEvent {
-    ConnectionRequest,
-    ConnectionComplete,
-    PinCodeRequest,
-    LinkKeyNotification,
-    DisconnectionComplete,
-}
-
-pub enum InquiryEvent {
-    Complete,
-    Result,
-}

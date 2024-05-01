@@ -1,7 +1,6 @@
 use tokio::sync::mpsc::error::TrySendError;
 use tracing::{warn};
 use crate::hci::buffer::ReceiveBuffer;
-use crate::hci::connection::ParsedConnectionEvent;
 use crate::hci::consts::{ClassOfDevice, LinkType, RemoteAddr, Status};
 use crate::hci::Error;
 use crate::hci::events::{ConnectionEvent, EventRouter};

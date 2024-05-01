@@ -2,7 +2,7 @@ use std::fmt::{Display, Formatter};
 use num_enum::{TryFromPrimitive, FromPrimitive, IntoPrimitive};
 
 /// HCI event codes ([Vol 4] Part E, Section 7.7).
-#[derive(Debug, Copy, Clone, Eq, PartialEq, TryFromPrimitive)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, TryFromPrimitive)]
 #[repr(u8)]
 pub enum EventCode {
     InquiryComplete = 0x01,

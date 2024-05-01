@@ -72,7 +72,7 @@ impl Debug for SendBuffer {
 }
 
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ReceiveBuffer {
     data: SmallVec<[u8; 8]>,
     index: usize

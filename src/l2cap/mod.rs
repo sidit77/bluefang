@@ -1,46 +1,67 @@
+use std::sync::Arc;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use nusb::transfer::{Queue, RequestBuffer, TransferError};
 use smallvec::SmallVec;
-use tracing::{debug, error, warn};
-use crate::ensure;
+use tokio::spawn;
+use tokio::sync::mpsc::unbounded_channel;
+use tracing::{debug, error, trace, warn};
+use crate::{ensure, hci};
 use crate::hci::acl::AclDataPacket;
-use crate::hci::connection::CONNECTIONS;
+use crate::hci::Hci;
 use crate::utils::SliceExt;
 
-pub async fn do_l2cap(mut acl_in: Queue<RequestBuffer>, mut acl_out: Queue<Vec<u8>>) {
-    loop {
-        let data = acl_in.next_complete().await;
-        match data.status {
-            //Ok(_) => match handle_acl_packet(&data.data) {
-            //    Ok(None) => {}
-            //    Ok(Some(reply)) => {
-            //        debug!("Sending reply...");
-            //        //TODO wait if there are too many packets in the queue
-            //        acl_out.submit(reply.as_ref().to_vec());
-            //    },
-            //    Err(err) => warn!("Error handling ACL packet: {:?}", err),
-            //},
-            Ok(_) => match handle_acl_packet2(&data.data) {
-                Ok(_) => {}
-                Err(err) => warn!("Error handling ACL packet: {:?}", err),
-            },
-            Err(err) => warn!("Error reading ACL data: {:?}", err),
+pub fn start_l2cap_server(hci: Arc<Hci>) -> Result<(), hci::Error> {
+    let mut data = {
+        let (tx, rx) = unbounded_channel();
+        hci.register_data_handler(tx)?;
+        rx
+    };
+    spawn(async move {
+        while let Some(data) = data.recv().await {
+            debug!("ACL data: {:02X?}", data);
+            //if let Err(err) = handle_acl_packet(&data) {
+            //    warn!("Error handling ACL packet: {:?}", err);
+            //}
         }
-        let len = data.data.capacity();
-        acl_in.submit(RequestBuffer::reuse(data.data, len));
-    }
-}
-
-pub fn handle_acl_packet2(data: &[u8]) -> Result<(), Error> {
-    debug!("ACL packet: {:02X?}", data);
-    let packet = AclDataPacket::from_bytes(data)?;
-    let mut connections = CONNECTIONS.lock();
-    let connection = connections.get_mut(&packet.handle).ok_or(Error::UnknownConnection)?;
-    if let Some(pdu) = connection.assembler.push(packet) {
-        handle_l2cap_packet(pdu)?;
-    }
+        trace!("L2CAP server finished");
+    });
     Ok(())
 }
+
+//pub async fn do_l2cap(mut acl_in: Queue<RequestBuffer>, mut acl_out: Queue<Vec<u8>>) {
+//    loop {
+//        let data = acl_in.next_complete().await;
+//        match data.status {
+//            //Ok(_) => match handle_acl_packet(&data.data) {
+//            //    Ok(None) => {}
+//            //    Ok(Some(reply)) => {
+//            //        debug!("Sending reply...");
+//            //        //TODO wait if there are too many packets in the queue
+//            //        acl_out.submit(reply.as_ref().to_vec());
+//            //    },
+//            //    Err(err) => warn!("Error handling ACL packet: {:?}", err),
+//            //},
+//            Ok(_) => match handle_acl_packet2(&data.data) {
+//                Ok(_) => {}
+//                Err(err) => warn!("Error handling ACL packet: {:?}", err),
+//            },
+//            Err(err) => warn!("Error reading ACL data: {:?}", err),
+//        }
+//        let len = data.data.capacity();
+//        acl_in.submit(RequestBuffer::reuse(data.data, len));
+//    }
+//}
+
+//pub fn handle_acl_packet2(data: &[u8]) -> Result<(), Error> {
+//    debug!("ACL packet: {:02X?}", data);
+//    let packet = AclDataPacket::from_bytes(data)?;
+//    let mut connections = CONNECTIONS.lock();
+//    let connection = connections.get_mut(&packet.handle).ok_or(Error::UnknownConnection)?;
+//    if let Some(pdu) = connection.assembler.push(packet) {
+//        handle_l2cap_packet(pdu)?;
+//    }
+//    Ok(())
+//}
 
 // ([Vol 3] Part A, Section 3.1).
 fn handle_l2cap_packet(data: &[u8]) -> Result<Option<ReplyPacket>, Error> {
