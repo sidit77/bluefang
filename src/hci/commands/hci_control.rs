@@ -16,7 +16,7 @@ impl Hci {
         assert!(name.len() < 248);
         self.call_with_args(Opcode::new(OpcodeGroup::HciControl, 0x0013), |p| {
             p.bytes(name.as_bytes());
-            p.u8(0);
+            p.pad(248 - name.len());
         }).await
     }
 

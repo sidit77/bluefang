@@ -214,7 +214,7 @@ impl State {
                 return Err(Error::BadEventPacketValue);
             }
         }
-        reply.prepend(u8::from(true).to_le_bytes());
+        reply.prepend(0x0000u16.to_le_bytes());
         reply.prepend(info_type.to_le_bytes());
         Ok(reply)
     }
