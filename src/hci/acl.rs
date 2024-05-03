@@ -12,7 +12,7 @@ pub struct AclDataAssembler {
 }
 
 impl AclDataAssembler {
-    pub fn push(&mut self, packet: AclDataPacket) -> Option<&[u8]> {
+    pub fn push(&mut self, packet: AclDataPacket) -> Option<Vec<u8>> {
         if packet.pb.is_first() {
             debug_assert!(!self.in_progress);
             if let Some(l2cap_pdu_length) = packet.data
@@ -40,7 +40,7 @@ impl AclDataAssembler {
             std::cmp::Ordering::Less => None,
             std::cmp::Ordering::Equal => {
                 self.in_progress = false;
-                Some(self.buffer.as_slice())
+                Some(std::mem::take(&mut self.buffer))
             }
             std::cmp::Ordering::Greater => {
                 warn!("L2CAP PDU length exceeded");

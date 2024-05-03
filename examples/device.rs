@@ -20,7 +20,8 @@ async fn main() -> anyhow::Result<()> {
 
     Hci::register_firmware_loader(RealTekFirmwareLoader::new());
 
-    let usb = UsbController::list(|info| info.vendor_id() == 0x2B89)?
+    //let usb = UsbController::list(|info| info.vendor_id() == 0x2B89)?
+    let usb = UsbController::list(|info| info.vendor_id() == 0x10D7)?
         .next()
         .context("failed to find device")?
         .claim()?;

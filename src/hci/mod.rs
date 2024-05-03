@@ -26,8 +26,9 @@ use crate::hci::events::{FromEvent};
 use crate::hci::consts::{EventCode, Status};
 
 pub use commands::*;
-use crate::hci::acl::AclDataPacket;
-use crate::hci::event_loop::{Event, EventLoopCommand};
+use crate::hci::acl::{AclDataPacket, BoundaryFlag, BroadcastFlag};
+use crate::hci::event_loop::{EventLoopCommand};
+pub use event_loop::Event;
 
 
 //TODO make generic over transport
@@ -37,6 +38,7 @@ pub struct Hci {
     cmd_out: MpscSender<(Opcode, SendBuffer, OneshotSender<Result<ReceiveBuffer, TransferError>>)>,
     acl_out: MpscSender<AclDataPacket>,
     ctl_out: MpscSender<EventLoopCommand>,
+    acl_size: usize,
     event_loop: Mutex<Option<JoinHandle<()>>>
 }
 
@@ -46,10 +48,11 @@ impl Hci {
         let (cmd_out, cmd_in) = unbounded_channel();
         let (ctl_out, ctl_in) = unbounded_channel();
         let event_loop = spawn(event_loop::event_loop(transport, cmd_in, acl_in, ctl_in));
-        let hci = Self {
+        let mut hci = Self {
             cmd_out,
             acl_out,
             ctl_out,
+            acl_size: 0,
             event_loop: Mutex::new(Some(event_loop))
         };
 
@@ -64,7 +67,11 @@ impl Hci {
 
         debug!("{:?}", hci.read_local_supported_commands().await?);
 
-        debug!("{:?}", hci.read_buffer_size().await?);
+        let buffer_size = hci.read_buffer_size().await?;
+        hci.acl_size = buffer_size.acl_data_packet_length as usize;
+        hci.ctl_out
+            .send(EventLoopCommand::SetMaxInFlightAclPackets(buffer_size.total_num_acl_data_packets as u32))
+            .map_err(|_| Error::EventLoopClosed)?;
 
         Ok(hci)
     }
@@ -84,6 +91,20 @@ impl Hci {
         self.ctl_out.send(EventLoopCommand::RegisterAclDataHandler {
             handler
         }).map_err(|_| Error::EventLoopClosed)
+    }
+
+    pub fn send_acl_data(&self, handle: u16, pdu: &[u8]) -> Result<(), Error> {
+        let mut pb = BoundaryFlag::FirstNonAutomaticallyFlushable;
+        for chunk in pdu.chunks(self.acl_size) {
+            self.acl_out.send(AclDataPacket {
+                handle,
+                pb,
+                bc: BroadcastFlag::PointToPoint,
+                data: chunk.to_vec()
+            }).map_err(|_| Error::EventLoopClosed)?;
+            pb = BoundaryFlag::Continuing;
+        }
+        Ok(())
     }
 
     pub async fn call<T: FromEvent>(&self, cmd: Opcode) -> Result<T, Error> {
@@ -147,12 +168,16 @@ pub enum Error {
     PayloadTooLarge,
     #[error("HCI Event has an invalid size")]
     BadEventPacketSize,
+    #[error("HCI Event has an invalid value")]
+    BadEventPacketValue,
     #[error("Event loop closed")]
     EventLoopClosed,
-    #[error("Unkown HCI Event code: 0x{0:02X}")]
+    #[error("Unknown HCI Event code: 0x{0:02X}")]
     UnknownEventCode(u8),
     #[error("Unexpected HCI Command Response for {0:?}")]
     UnexpectedCommandResponse(Opcode),
+    #[error("Unknown connection handle: 0x{0:02X}")]
+    UnknownConnectionHandle(u16),
     #[error(transparent)]
     Controller(#[from] Status)
 }

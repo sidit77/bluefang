@@ -25,7 +25,8 @@ pub enum EventLoopCommand {
     },
     RegisterAclDataHandler {
         handler: MpscSender<AclDataPacket>,
-    }
+    },
+    SetMaxInFlightAclPackets(u32),
 }
 
 pub async fn event_loop(
@@ -114,6 +115,9 @@ pub async fn event_loop(
                     }
                     Some(EventLoopCommand::RegisterAclDataHandler { handler }) => {
                         state.acl_data_handlers.push(handler);
+                    }
+                    Some(EventLoopCommand::SetMaxInFlightAclPackets(n)) => {
+                        state.max_in_flight = n;
                     }
                     Some(EventLoopCommand::Shutdown) | None => {
                         break;

@@ -14,8 +14,8 @@ pub fn handle_connection(hci: Arc<Hci>) -> Result<(), Error> {
         hci.register_event_handler(
             [
                 EventCode::ConnectionRequest,
-                EventCode::ConnectionComplete,
-                EventCode::DisconnectionComplete,
+                // EventCode::ConnectionComplete,
+                // EventCode::DisconnectionComplete,
                 EventCode::PinCodeRequest,
                 EventCode::LinkKeyNotification,
             ],
@@ -46,43 +46,6 @@ async fn handle_event(hci: &Hci, event: Event) -> Result<(), Error> {
 
             ensure!(link_type == LinkType::Acl, "Invalid link type");
             hci.accept_connection_request(addr, Role::Slave).await?;
-        },
-        EventCode::ConnectionComplete => {
-            // ([Vol 4] Part E, Section 7.7.3).
-            let status = data.u8().map(Status::from)?;
-            let handle = data.u16()?;
-            let addr = data.bytes().map(RemoteAddr::from)?;
-            let link_type = data.u8().map(LinkType::from)?;
-            let _encryption_enabled = data.u8().map(|b| b == 0x01)?;
-            data.finish()?;
-
-            assert_eq!(link_type, LinkType::Acl);
-            if status == Status::Success {
-                //assert!(CONNECTIONS
-                //    .lock()
-                //    .insert(handle, PhysicalConnection {
-                //        handle,
-                //        addr,
-                //        assembler: AclDataAssembler::default(),
-                //    }).is_none());
-                debug!("Connection complete: 0x{:04X} {}", handle, addr);
-            } else {
-                warn!("Connection failed: {:?}", status);
-            }
-        },
-        EventCode::DisconnectionComplete => {
-            // ([Vol 4] Part E, Section 7.7.5).
-            let status = data.u8().map(Status::from)?;
-            let handle = data.u16()?;
-            let reason = data.u8().map(Status::from)?;
-            data.finish()?;
-
-            //CONNECTIONS.lock().remove(&conn);
-            if status == Status::Success {
-                debug!("Disconnection complete: {:?} {:?}", handle, reason);
-            } else {
-                warn!("Disconnection failed: {:?}", status);
-            }
         },
         EventCode::PinCodeRequest => {
             // ([Vol 4] Part E, Section 7.7.22).
