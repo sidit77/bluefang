@@ -112,6 +112,6 @@ impl AsRef<[u8]> for RemoteAddr {
 
 impl FromEvent for RemoteAddr {
     fn unpack(buf: &mut ReceiveBuffer) -> Result<Self, Error> {
-        buf.bytes().map(Self::from)
+        buf.array().map(Self::from)
     }
 }

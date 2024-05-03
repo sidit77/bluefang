@@ -9,7 +9,7 @@ use tracing::{error, info};
 const BTSNOOP_MAGIC: &[u8] = b"btsnoop\0";
 const BTSNOOP_VERSION: u32 = 1;
 
-const BTSNOOP_FORMAT_HCI: u32 = 1001;
+// const BTSNOOP_FORMAT_HCI: u32 = 1001;
 const BTSNOOP_FORMAT_MONITOR: u32 = 2001;
 
 pub struct LogWriter {

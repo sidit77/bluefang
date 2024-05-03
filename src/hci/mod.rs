@@ -17,7 +17,7 @@ use nusb::transfer::TransferError;
 use parking_lot::Mutex;
 use tokio::spawn;
 use tokio::task::JoinHandle;
-use tracing::{debug, error};
+use tracing::{debug, error, trace};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender as MpscSender};
 use tokio::sync::oneshot::Sender as OneshotSender;
 use tokio::time::sleep;
@@ -95,6 +95,7 @@ impl Hci {
     }
 
     pub fn send_acl_data(&self, handle: u16, pdu: &[u8]) -> Result<(), Error> {
+        trace!("Sending ACL data to handle 0x{:04X}", handle);
         let mut pb = BoundaryFlag::FirstNonAutomaticallyFlushable;
         for chunk in pdu.chunks(self.acl_size) {
             self.acl_out.send(AclDataPacket {

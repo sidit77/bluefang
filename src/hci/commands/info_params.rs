@@ -65,7 +65,7 @@ impl FromEvent for SupportedCommands {
 
     #[inline]
     fn unpack(buf: &mut ReceiveBuffer) -> Result<Self, Error> {
-        buf.bytes().map(Self)
+        buf.array().map(Self)
     }
 }
 

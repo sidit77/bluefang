@@ -39,7 +39,7 @@ async fn handle_event(hci: &Hci, event: Event) -> Result<(), Error> {
     match code {
         EventCode::ConnectionRequest => {
             // ([Vol 4] Part E, Section 7.7.4).
-            let addr = data.bytes().map(RemoteAddr::from)?;
+            let addr = data.array().map(RemoteAddr::from)?;
             let _class = data.u24().map(ClassOfDevice::from)?;
             let link_type = data.u8().map(LinkType::from)?;
             data.finish()?;
@@ -49,7 +49,7 @@ async fn handle_event(hci: &Hci, event: Event) -> Result<(), Error> {
         },
         EventCode::PinCodeRequest => {
             // ([Vol 4] Part E, Section 7.7.22).
-            let addr = data.bytes().map(RemoteAddr::from)?;
+            let addr = data.array().map(RemoteAddr::from)?;
             data.finish()?;
 
             debug!("Pin code request: {}", addr);
@@ -57,8 +57,8 @@ async fn handle_event(hci: &Hci, event: Event) -> Result<(), Error> {
         },
         EventCode::LinkKeyNotification => {
             // ([Vol 4] Part E, Section 7.7.24).
-            let addr = data.bytes().map(RemoteAddr::from)?;
-            let key = data.bytes::<16>()?;
+            let addr = data.array().map(RemoteAddr::from)?;
+            let key = data.array::<16>()?;
             let key_type = data.u8()?;
             data.finish()?;
 

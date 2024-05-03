@@ -26,6 +26,7 @@ pub fn start_l2cap_server(hci: Arc<Hci>) -> Result<(), hci::Error> {
             [
                 EventCode::ConnectionComplete,
                 EventCode::DisconnectionComplete,
+                EventCode::MaxSlotsChange
             ],
             tx)?;
         rx
@@ -59,16 +60,21 @@ pub fn start_l2cap_server(hci: Arc<Hci>) -> Result<(), hci::Error> {
 
 struct PhysicalConnection {
     handle: u16,
+    max_slots: u8,
     addr: RemoteAddr,
     assembler: AclDataAssembler,
 }
 
 struct State {
     hci: Arc<Hci>,
-    connections: BTreeMap<u16, PhysicalConnection>
+    connections: BTreeMap<u16, PhysicalConnection>,
 }
 
 impl State {
+
+    fn get_connection(&mut self, handle: u16) -> Result<&mut PhysicalConnection, Error> {
+        self.connections.get_mut(&handle).ok_or(Error::UnknownConnectionHandle(handle))
+    }
 
     fn handle_event(&mut self, event: Event) -> Result<(), Error> {
         let Event { code, mut data, .. } = event;
@@ -77,7 +83,7 @@ impl State {
                 // ([Vol 4] Part E, Section 7.7.3).
                 let status = data.u8().map(Status::from)?;
                 let handle = data.u16()?;
-                let addr = data.bytes().map(RemoteAddr::from)?;
+                let addr = data.array().map(RemoteAddr::from)?;
                 let link_type = data.u8().map(LinkType::from)?;
                 let _encryption_enabled = data.u8().map(|b| b == 0x01)?;
                 data.finish()?;
@@ -88,6 +94,7 @@ impl State {
                         .connections
                         .insert(handle, PhysicalConnection {
                             handle,
+                            max_slots: 0x01,
                             addr,
                             assembler: AclDataAssembler::default(),
                         }).is_none());
@@ -110,6 +117,14 @@ impl State {
                     warn!("Disconnection failed: {:?}", status);
                 }
             },
+            EventCode::MaxSlotsChange => {
+                // ([Vol 4] Part E, Section 7.7.27).
+                let handle = data.u16()?;
+                let max_slots = data.u8()?;
+                data.finish()?;
+                self.get_connection(handle)?.max_slots = max_slots;
+                debug!("Max slots change: {:?} {:?}", handle, max_slots);
+            }
             _ => unreachable!()
         }
         Ok(())
@@ -118,8 +133,7 @@ impl State {
     fn handle_data(&mut self, data: AclDataPacket) -> Result<(), Error> {
         debug!("ACL data: {:02X?}", data);
         let handle = data.handle;
-        let mut connection = self.connections.get_mut(&handle).ok_or(Error::UnknownConnectionHandle(handle))?;
-        if let Some(pdu) = connection.assembler.push(data) {
+        if let Some(pdu) = self.get_connection(handle)?.assembler.push(data) {
             self.handle_l2cap_packet(handle, &pdu)?;
         }
         Ok(())

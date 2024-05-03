@@ -109,11 +109,18 @@ impl ReceiveBuffer {
         Ok(value)
     }
 
-    pub fn bytes<const N: usize>(&mut self) -> Result<[u8; N], Error> {
+    pub fn array<const N: usize>(&mut self) -> Result<[u8; N], Error> {
         let value = self.data.get_chunk(self.index)
             .copied()
             .ok_or(Error::BadEventPacketSize)?;
         self.index += N;
+        Ok(value)
+    }
+
+    pub fn bytes(&mut self, n: usize) -> Result<&[u8], Error> {
+        let value = self.data.get(self.index..self.index + n)
+            .ok_or(Error::BadEventPacketSize)?;
+        self.index += n;
         Ok(value)
     }
 

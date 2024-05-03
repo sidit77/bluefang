@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::pending;
 use std::mem::size_of;
-use std::ops::Not;
 use nusb::transfer::{ControlOut, ControlType, Recipient, RequestBuffer, TransferError};
 use tokio::sync::mpsc::{UnboundedSender as MpscSender, UnboundedReceiver as MpscReceiver};
 use tokio::sync::oneshot::Sender as OneshotSender;
@@ -13,7 +12,7 @@ use crate::hci::acl::AclDataPacket;
 use crate::hci::btsnoop::{LogWriter, PacketType};
 use crate::hci::consts::{EventCode, Status};
 use crate::host::usb::UsbHost;
-use crate::utils::DispatchExt;
+use crate::utils::{DispatchExt, SliceExt};
 
 const MAX_HCI_EVENT_SIZE: usize = 1 + size_of::<u8>() + u8::MAX as usize;
 const HCI_EVENT_QUEUE_SIZE: usize = 4;
@@ -182,7 +181,20 @@ impl State {
                     None => return Err(Error::UnexpectedCommandResponse(opcode))
                 }
                 Ok(true)
-            }
+            },
+            EventCode::NumberOfCompletedPackets => {
+                // ([Vol 4] Part E, Section 7.7.19).
+                let count = event.data.u8()? as usize;
+                let (handles, counts) = event.data.bytes(count * 4)?.split_at(count * 2);
+                for i in 0..count {
+                    let handle = handles.get_chunk(i * 2).copied().map(u16::from_le_bytes).unwrap();
+                    let count = counts.get_chunk(i * 2).copied().map(u16::from_le_bytes).unwrap();
+                    trace!("Flushed {} packets for handle {}", count, handle);
+                    self.in_flight = self.in_flight.saturating_sub(count as u32);
+                }
+                event.data.finish()?;
+                Ok(true)
+            },
             _ => {
                 let code = event.code;
                 let handled = self.hci_event_handlers
