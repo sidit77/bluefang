@@ -7,6 +7,7 @@ mod commands;
 pub mod acl;
 mod event_loop;
 pub mod connection;
+pub mod btsnoop;
 
 use std::collections::BTreeSet;
 use std::future::Future;

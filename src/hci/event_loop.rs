@@ -10,6 +10,7 @@ use crate::ensure;
 use crate::hci::buffer::{ReceiveBuffer, SendBuffer};
 use crate::hci::{Error, Opcode};
 use crate::hci::acl::AclDataPacket;
+use crate::hci::btsnoop::{LogWriter, PacketType};
 use crate::hci::consts::{EventCode, Status};
 use crate::host::usb::UsbHost;
 use crate::utils::DispatchExt;
@@ -47,14 +48,19 @@ pub async fn event_loop(
     let mut acl_out = transport.interface.bulk_out_queue(transport.endpoints.acl_out);
 
     let mut state = State::default();
+    let log = LogWriter::new("btsnoop.log");
 
     loop {
         tokio::select! {
             event = events.next_complete() => {
                 match event.status {
-                    Ok(_) => match state.process_hci_event(&event.data) {
-                        Ok(_) => (),
-                        Err(err) => error!("Error processing HCI event: {:?}", err),
+                    Ok(_) => {
+                        log.write(PacketType::Event, &event.data);
+                        match state.process_hci_event(&event.data) {
+                            Ok(true) => (),
+                            Ok(false) => log.write(PacketType::SystemNode, "Unhandled HCI event".as_bytes()),
+                            Err(err) => error!("Error processing HCI event: {:?}", err),
+                        }
                     },
                     Err(err) => error!("Error reading HCI event: {:?}", err),
                 }
@@ -62,9 +68,10 @@ pub async fn event_loop(
             },
             data = acl_in.next_complete() => {
                 match data.status {
-                    Ok(_) => match state.process_acl_data(&data.data) {
-                        Ok(_) => (),
-                        Err(err) => error!("Error processing ACL data: {:?}", err),
+                    Ok(_) => {
+                        log.write(PacketType::AclRx, &data.data);
+                        state.process_acl_data(&data.data)
+                            .unwrap_or_else(|err| error!("Error processing ACL data: {:?}", err));
                     },
                     Err(err) => error!("Error reading HCI event: {:?}", err),
                 }
@@ -78,13 +85,16 @@ pub async fn event_loop(
             data = acl_receiver.recv(), if state.in_flight < state.max_in_flight => {
                 if let Some(data) = data {
                     state.in_flight += 1;
-                    acl_out.submit(data.into_vec());
+                    let data = data.into_vec();
+                    log.write(PacketType::AclTx, &data);
+                    acl_out.submit(data);
                 } else  {
                     break;
                 }
             },
             cmd = cmd_receiver.recv(), if state.outstanding_command.is_none() => {
                 if let Some((opcode, req, tx)) = cmd {
+                    log.write(PacketType::Command, &req.data());
                     let cmd = transport.interface.control_out(ControlOut {
                         control_type: ControlType::Class,
                         recipient: Recipient::Interface,
@@ -147,7 +157,7 @@ impl State {
         }
     }
 
-    fn process_hci_event(&mut self, event: &[u8]) -> Result<(), Error> {
+    fn process_hci_event(&mut self, event: &[u8]) -> Result<bool, Error> {
         let mut event = Event::parse(event)?;
         trace!("Received HCI event: {:?}", event.code);
         match event.code {
@@ -171,17 +181,19 @@ impl State {
                     },
                     None => return Err(Error::UnexpectedCommandResponse(opcode))
                 }
+                Ok(true)
             }
             _ => {
                 let code = event.code;
-                self.hci_event_handlers
+                let handled = self.hci_event_handlers
                     .get_mut(&code)
-                    .map_or(false, |handlers| handlers.dispatch(event))
-                    .not()
-                    .then(|| warn!("Unhandled HCI event: {:?}", code));
+                    .map_or(false, |handlers| handlers.dispatch(event));
+                if !handled {
+                    warn!("Unhandled HCI event: {:?}", code);
+                }
+                Ok(handled)
             },
         }
-        Ok(())
     }
 
     fn process_acl_data(&mut self, data: &[u8]) -> Result<(), Error> {
