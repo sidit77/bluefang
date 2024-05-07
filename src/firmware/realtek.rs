@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
+use bytes::BufMut;
 use tracing::{debug, error};
 use crate::ensure;
 use crate::hci::{Error, FirmwareLoader, Hci, Opcode, OpcodeGroup};
@@ -265,7 +266,10 @@ impl RtkHciExit for Hci {
     async fn download(&self, index: u8, data: &[u8]) -> Result<u8, Error> {
         self.call_with_args(
             Opcode::new(OpcodeGroup::Vendor, 0x0020),
-            |p| p.u8(index).bytes(data).end())
+            |p| {
+                p.put_u8(index);
+                p.put_slice(data);
+            })
             .await
     }
 }

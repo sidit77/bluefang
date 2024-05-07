@@ -3,6 +3,7 @@ mod hci_control;
 mod link_control;
 
 use std::fmt::{Debug, Formatter};
+use instructor::Exstruct;
 use num_enum::TryFromPrimitive;
 
 pub use info_params::*;
@@ -24,7 +25,7 @@ pub enum OpcodeGroup {
     Vendor = 0x3F, // [Vol 4] Part E, Section 5.4.1
 }
 
-#[derive(Default, Copy, Clone, Eq, PartialEq)]
+#[derive(Default, Copy, Clone, Eq, PartialEq, Exstruct)]
 pub struct Opcode(u16);
 
 #[allow(dead_code)]

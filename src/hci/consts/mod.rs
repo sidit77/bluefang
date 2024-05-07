@@ -3,16 +3,14 @@ mod events;
 mod class_of_device;
 
 use std::fmt::{Debug, Display, Formatter};
-use num_enum::{FromPrimitive, IntoPrimitive};
+use instructor::{BufferMut, Endian, Exstruct, Instruct};
+use instructor::utils::u24;
 
 pub use events::*;
 pub use class_of_device::*;
-use crate::hci::buffer::ReceiveBuffer;
-use crate::hci::Error;
-use crate::hci::events::FromEvent;
 
 /// Bluetooth Core Specification versions ([Assigned Numbers] Section 2.1).
-#[derive(Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd, FromPrimitive, IntoPrimitive)]
+#[derive(Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd, Exstruct)]
 #[non_exhaustive]
 #[repr(u8)]
 pub enum CoreVersion {
@@ -57,37 +55,43 @@ impl Debug for CoreVersion {
 }
 
 /// Company identifier ([Assigned Numbers] Section 7.1).
-#[derive(Debug, Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd, Exstruct)]
 #[repr(transparent)]
 pub struct CompanyId(pub u16);
 
 /// LAPs ([Assigned Numbers] Section 2.2).
 /// Range 0x9E8B00 to 0x9E8B3F
-#[derive(Debug, Copy, Clone, Eq, PartialEq, IntoPrimitive)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[repr(u32)]
 pub enum Lap {
     Limited = 0x9E8B00,
     General = 0x9E8B33,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, FromPrimitive)]
+impl<E: Endian> Instruct<E> for Lap {
+    fn write_to_buffer<B: BufferMut + ?Sized>(&self, buffer: &mut B) {
+        buffer.write::<u24, E>(&(*self as u32).try_into().unwrap());
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Exstruct)]
 #[repr(u8)]
 pub enum LinkType {
     Sco = 0x00,
     Acl = 0x01,
     ESco = 0x02,
-    #[num_enum(default)]
+    #[instructor(default)]
     Unknown = 0xFF
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, IntoPrimitive)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Exstruct, Instruct)]
 #[repr(u8)]
 pub enum Role {
     Master = 0x00,
     Slave = 0x01,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Exstruct, Instruct)]
 pub struct RemoteAddr([u8; 6]);
 
 impl Display for RemoteAddr {
@@ -107,11 +111,5 @@ impl From<[u8; 6]> for RemoteAddr {
 impl AsRef<[u8]> for RemoteAddr {
     fn as_ref(&self) -> &[u8] {
         &self.0
-    }
-}
-
-impl FromEvent for RemoteAddr {
-    fn unpack(buf: &mut ReceiveBuffer) -> Result<Self, Error> {
-        buf.array().map(Self::from)
     }
 }

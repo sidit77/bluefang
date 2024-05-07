@@ -1,3 +1,5 @@
+use bytes::BufMut;
+use instructor::BufferMut;
 use crate::hci::{Error, Hci, Opcode, OpcodeGroup};
 use crate::hci::consts::{Lap, RemoteAddr, Role, Status};
 
@@ -11,9 +13,9 @@ impl Hci {
     /// - `max_responses`: The maximum number of responses to receive. 0 means no limit.
     pub async fn inquiry(&self, lap: Lap, time: u8, max_responses: u8) -> Result<(), Error> {
         self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x0001), |p| {
-            p.u24(lap);
-            p.u8(time);
-            p.u8(max_responses);
+            p.write_le(&lap);
+            p.write_le(&time);
+            p.write_le(&max_responses);
         }).await?;
         // TODO return channel for inquiry results
         Ok(())
@@ -23,8 +25,8 @@ impl Hci {
     /// ([Vol 4] Part E, Section 7.1.8).
     pub async fn accept_connection_request(&self, bd_addr: RemoteAddr, role: Role) -> Result<(), Error> {
         self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x0009), |p| {
-            p.bytes(bd_addr.as_ref());
-            p.u8(role);
+            p.write_le(&bd_addr);
+            p.write_le(&role);
         }).await?;
         Ok(())
     }
@@ -34,8 +36,8 @@ impl Hci {
     pub async fn reject_connection_request(&self, bd_addr: RemoteAddr, reason: Status) -> Result<(), Error> {
         assert!(matches!(reason, Status::ConnectionRejectedDueToLimitedResources | Status::ConnectionRejectedDueToSecurityReasons | Status::ConnectionRejectedDueToUnacceptableBdAddr));
         self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x000A), |p| {
-            p.bytes(bd_addr.as_ref());
-            p.u8(reason);
+            p.write_le(&bd_addr);
+            p.write_le(&reason);
         }).await?;
         Ok(())
     }
@@ -43,10 +45,10 @@ impl Hci {
     pub async fn pin_code_request_reply(&self, bd_addr: RemoteAddr, pin: &str) -> Result<RemoteAddr, Error> {
         assert!(pin.len() <= 16);
         self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x000D), |p| {
-            p.bytes(bd_addr.as_ref());
-            p.u8(pin.len() as u8);
-            p.bytes(pin.as_bytes());
-            p.pad(16 - pin.len());
+            p.write_le(&bd_addr);
+            p.write_le(&(pin.len() as u8));
+            p.put_slice(pin.as_bytes());
+            p.put_bytes(0, 16 - pin.len());
         }).await
     }
 

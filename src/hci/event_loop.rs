@@ -1,18 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::pending;
 use std::mem::size_of;
+use bytes::{Buf, BufMut, Bytes, BytesMut};
+use instructor::{Buffer, Exstruct};
+use instructor::utils::Length;
 use nusb::transfer::{ControlOut, ControlType, Recipient, RequestBuffer, TransferError};
 use tokio::sync::mpsc::{UnboundedSender as MpscSender, UnboundedReceiver as MpscReceiver};
 use tokio::sync::oneshot::Sender as OneshotSender;
 use tracing::{debug, error, trace, warn};
-use crate::ensure;
-use crate::hci::buffer::{ReceiveBuffer, SendBuffer};
 use crate::hci::{Error, Opcode};
-use crate::hci::acl::AclDataPacket;
 use crate::hci::btsnoop::{LogWriter, PacketType};
 use crate::hci::consts::{EventCode, Status};
 use crate::host::usb::UsbHost;
-use crate::utils::{DispatchExt, SliceExt};
+use crate::utils::{DispatchExt};
 
 const MAX_HCI_EVENT_SIZE: usize = 1 + size_of::<u8>() + u8::MAX as usize;
 const HCI_EVENT_QUEUE_SIZE: usize = 4;
@@ -21,18 +21,18 @@ pub enum EventLoopCommand {
     Shutdown,
     RegisterHciEventHandler {
         events: BTreeSet<EventCode>,
-        handler: MpscSender<Event>,
+        handler: MpscSender<(EventCode, Bytes)>,
     },
     RegisterAclDataHandler {
-        handler: MpscSender<AclDataPacket>,
+        handler: MpscSender<Bytes>,
     },
     SetMaxInFlightAclPackets(u32),
 }
 
 pub async fn event_loop(
     transport: UsbHost,
-    mut cmd_receiver: MpscReceiver<(Opcode, SendBuffer, OneshotSender<Result<ReceiveBuffer, TransferError>>)>,
-    mut acl_receiver: MpscReceiver<AclDataPacket>,
+    mut cmd_receiver: MpscReceiver<(Opcode, Bytes, OneshotSender<Result<Bytes, TransferError>>)>,
+    mut acl_receiver: MpscReceiver<Bytes>,
     mut ctl_receiver: MpscReceiver<EventLoopCommand>,
 ) {
     let mut events = transport.interface.interrupt_in_queue(transport.endpoints.event);
@@ -48,16 +48,19 @@ pub async fn event_loop(
 
     let mut state = State::default();
     let log = LogWriter::new("btsnoop.log");
+    let mut buffer = BytesMut::with_capacity(4096);
 
     loop {
         tokio::select! {
             event = events.next_complete() => {
                 match event.status {
                     Ok(_) => {
-                        log.write(PacketType::Event, &event.data);
-                        match state.process_hci_event(&event.data) {
+                        buffer.put_slice(&event.data);
+                        let data = buffer.split().freeze();
+                        log.write(PacketType::Event, data.clone());
+                        match state.process_hci_event(data) {
                             Ok(true) => (),
-                            Ok(false) => log.write(PacketType::SystemNode, "Unhandled HCI event".as_bytes()),
+                            Ok(false) => log.write(PacketType::SystemNode, Bytes::from_static("Unhandled HCI event".as_bytes())),
                             Err(err) => error!("Error processing HCI event: {:?}", err),
                         }
                     },
@@ -68,8 +71,10 @@ pub async fn event_loop(
             data = acl_in.next_complete() => {
                 match data.status {
                     Ok(_) => {
-                        log.write(PacketType::AclRx, &data.data);
-                        state.process_acl_data(&data.data)
+                        buffer.put_slice(&data.data);
+                        let data = buffer.split().freeze();
+                        log.write(PacketType::AclRx, data.clone());
+                        state.process_acl_data(data)
                             .unwrap_or_else(|err| error!("Error processing ACL data: {:?}", err));
                     },
                     Err(err) => error!("Error reading HCI event: {:?}", err),
@@ -84,8 +89,8 @@ pub async fn event_loop(
             data = acl_receiver.recv(), if state.in_flight < state.max_in_flight => {
                 if let Some(data) = data {
                     state.in_flight += 1;
-                    let data = data.into_vec();
-                    log.write(PacketType::AclTx, &data);
+                    log.write(PacketType::AclTx, data.clone());
+                    let data = data.to_vec();
                     acl_out.submit(data);
                 } else  {
                     break;
@@ -93,14 +98,14 @@ pub async fn event_loop(
             },
             cmd = cmd_receiver.recv(), if state.outstanding_command.is_none() => {
                 if let Some((opcode, req, tx)) = cmd {
-                    log.write(PacketType::Command, &req.data());
+                    log.write(PacketType::Command, req.clone());
                     let cmd = transport.interface.control_out(ControlOut {
                         control_type: ControlType::Class,
                         recipient: Recipient::Interface,
                         request: 0x00,
                         value: 0x00,
                         index: transport.endpoints.main_iface.into(),
-                        data: req.data(),
+                        data: &req,
                     }).await;
                     match cmd.status {
                         Ok(_) => state.outstanding_command = Some((opcode, tx)),
@@ -135,14 +140,15 @@ pub async fn event_loop(
             }
         }
     }
+
     debug!("Event loop closed");
 }
 
 #[derive(Default)]
 struct State {
-    outstanding_command: Option<(Opcode, OneshotSender<Result<ReceiveBuffer, TransferError>>)>,
-    hci_event_handlers: BTreeMap<EventCode, Vec<MpscSender<Event>>>,
-    acl_data_handlers: Vec<MpscSender<AclDataPacket>>,
+    outstanding_command: Option<(Opcode, OneshotSender<Result<Bytes, TransferError>>)>,
+    hci_event_handlers: BTreeMap<EventCode, Vec<MpscSender<(EventCode, Bytes)>>>,
+    acl_data_handlers: Vec<MpscSender<Bytes>>,
     max_in_flight: u32,
     in_flight: u32,
 }
@@ -156,22 +162,25 @@ impl State {
         }
     }
 
-    fn process_hci_event(&mut self, event: &[u8]) -> Result<bool, Error> {
-        let mut event = Event::parse(event)?;
-        trace!("Received HCI event: {:?}", event.code);
-        match event.code {
+    fn process_hci_event(&mut self, mut data: Bytes) -> Result<bool, Error> {
+        let header: EventHeader = data.read_le()?;
+        trace!("Received HCI event: {:?}", header.code);
+        match header.code {
             EventCode::CommandComplete | EventCode::CommandStatus => {
                 // ([Vol 4] Part E, Section 7.7.14).
                 // ([Vol 4] Part E, Section 7.7.15).
-                if let EventCode::CommandStatus = event.code {
-                    event.data.get_mut().rotate_left(size_of::<Status>());
+                if let EventCode::CommandStatus = header.code {
+                    let mut tmp = BytesMut::with_capacity(data.len());
+                    tmp.put(data);
+                    tmp.rotate_left(size_of::<Status>());
+                    data = tmp.freeze();
                 }
-                let _cmd_quota = event.data.u8()?;
-                let opcode= event.data.u16().map(Opcode::from)?;
+                let _cmd_quota: u8 = data.read_le()?;
+                let opcode: Opcode = data.read_le()?;
                 // trace!("Received CommandComplete for {:?}", opcode);
                 match self.outstanding_command.take() {
                     Some((op, tx)) if op == opcode => {
-                        tx.send(Ok(event.data))
+                        tx.send(Ok(data))
                             .unwrap_or_else(|_| debug!("CommandComplete receiver dropped"))
                     },
                     Some((op, tx)) => {
@@ -184,22 +193,23 @@ impl State {
             },
             EventCode::NumberOfCompletedPackets => {
                 // ([Vol 4] Part E, Section 7.7.19).
-                let count = event.data.u8()? as usize;
-                let (handles, counts) = event.data.bytes(count * 4)?.split_at(count * 2);
-                for i in 0..count {
-                    let handle = handles.get_chunk(i * 2).copied().map(u16::from_le_bytes).unwrap();
-                    let count = counts.get_chunk(i * 2).copied().map(u16::from_le_bytes).unwrap();
+                let count = data.read_le::<u8>()? as usize;
+                let mut handles = data.split_to(count * 2);
+                let mut counts = data.split_to(count * 2);
+                for _ in 0..count {
+                    let handle: u16 = handles.read_le()?;
+                    let count: u16 = counts.read_le()?;
                     trace!("Flushed {} packets for handle {}", count, handle);
                     self.in_flight = self.in_flight.saturating_sub(count as u32);
                 }
-                event.data.finish()?;
+                data.finish()?;
                 Ok(true)
             },
             _ => {
-                let code = event.code;
+                let code = header.code;
                 let handled = self.hci_event_handlers
                     .get_mut(&code)
-                    .map_or(false, |handlers| handlers.dispatch(event));
+                    .map_or(false, |handlers| handlers.dispatch((code, data)));
                 if !handled {
                     warn!("Unhandled HCI event: {:?}", code);
                 }
@@ -208,37 +218,38 @@ impl State {
         }
     }
 
-    fn process_acl_data(&mut self, data: &[u8]) -> Result<(), Error> {
-        let data = AclDataPacket::from_bytes(data).ok_or(Error::BadEventPacketSize)?;
+    fn process_acl_data(&mut self, data: Bytes) -> Result<(), Error> {
+        // let data = AclDataPacket::from_bytes(data).ok_or(Error::BadEventPacketSize)?;
         self.acl_data_handlers.dispatch(data);
         Ok(())
     }
 
 }
 
-#[derive(Debug, Clone)]
-pub struct Event {
+/// HCI event packet ([Vol 4] Part E, Section 5.4.4).
+#[derive(Debug, Clone, Exstruct)]
+pub struct EventHeader {
     pub code: EventCode,
-    pub data: ReceiveBuffer,
+    pub length: Length<u8, 0>
 }
 
-impl Event {
-    /// HCI event packet ([Vol 4] Part E, Section 5.4.4).
-    fn parse(data: &[u8]) -> Result<Self, Error> {
-        data
-            .split_first_chunk()
-            .ok_or(Error::BadEventPacketSize)
-            .and_then(|([code, len], payload)| {
-                let code = EventCode::try_from(*code)
-                    .map_err(|_| Error::UnknownEventCode(*code))?;
-                ensure!(*len as usize == payload.len(), Error::BadEventPacketSize);
-                Ok(Self {
-                    code,
-                    data: ReceiveBuffer::from_payload(payload)
-                })
-            })
-    }
-}
+//impl Event {
+//
+//    fn parse(data: &[u8]) -> Result<Self, Error> {
+//        data
+//            .split_first_chunk()
+//            .ok_or(Error::BadEventPacketSize)
+//            .and_then(|([code, len], payload)| {
+//                let code = EventCode::try_from(*code)
+//                    .map_err(|_| Error::UnknownEventCode(*code))?;
+//                ensure!(*len as usize == payload.len(), Error::BadEventPacketSize);
+//                Ok(Self {
+//                    code,
+//                    data: ReceiveBuffer::from_payload(payload)
+//                })
+//            })
+//    }
+//}
 
 
 /*

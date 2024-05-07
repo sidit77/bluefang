@@ -1,3 +1,5 @@
+use bytes::BufMut;
+use instructor::{BufferMut, LittleEndian};
 use crate::hci::{Error, Hci};
 use crate::hci::commands::{Opcode, OpcodeGroup};
 use crate::hci::consts::ClassOfDevice;
@@ -15,8 +17,8 @@ impl Hci {
     pub async fn write_local_name(&self, name: &str) -> Result<(), Error> {
         assert!(name.len() < 248);
         self.call_with_args(Opcode::new(OpcodeGroup::HciControl, 0x0013), |p| {
-            p.bytes(name.as_bytes());
-            p.pad(248 - name.len());
+            p.put_slice(name.as_bytes());
+            p.put_bytes(0, 248 - name.len());
         }).await
     }
 
@@ -24,7 +26,7 @@ impl Hci {
     /// ([Vol 4] Part E, Section 7.3.18).
     pub async fn set_scan_enabled(&self, connectable: bool, discoverable: bool) -> Result<(), Error> {
         self.call_with_args(Opcode::new(OpcodeGroup::HciControl, 0x001A), |p| {
-            p.u8(u8::from(connectable) << 1 | u8::from(discoverable));
+            p.write::<u8, LittleEndian>(&(u8::from(connectable) << 1 | u8::from(discoverable)));
         }).await
     }
 
@@ -32,7 +34,7 @@ impl Hci {
     /// ([Vol 4] Part E, Section 7.3.26).
     pub async fn write_class_of_device(&self, cod: ClassOfDevice) -> Result<(), Error> {
         self.call_with_args(Opcode::new(OpcodeGroup::HciControl, 0x0024), |p| {
-            p.u24(cod);
+            p.write_le(&cod);
         }).await
     }
 

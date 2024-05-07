@@ -1,8 +1,7 @@
+use instructor::Exstruct;
 use crate::hci::{Error, Hci};
-use crate::hci::buffer::ReceiveBuffer;
 use crate::hci::commands::{Opcode, OpcodeGroup};
 use crate::hci::consts::{CompanyId, CoreVersion};
-use crate::hci::events::FromEvent;
 
 /// Informational parameters commands ([Vol 4] Part E, Section 7.4).
 impl Hci {
@@ -29,28 +28,17 @@ impl Hci {
 
 /// `HCI_Read_Buffer_Size` return parameters
 /// ([Vol 4] Part E, Section 7.4.5).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Exstruct)]
 pub struct BufferSizes {
     pub acl_data_packet_length: u16,
     pub synchronous_data_packet_length: u8,
     pub total_num_acl_data_packets: u16,
-    pub total_num_synchronous_data_packets: Option<u16>,
-}
-
-impl FromEvent for BufferSizes {
-    fn unpack(buf: &mut ReceiveBuffer) -> Result<Self, Error> {
-        Ok(Self {
-            acl_data_packet_length: buf.u16()?,
-            synchronous_data_packet_length: buf.u8()?,
-            total_num_acl_data_packets: buf.u16()?,
-            total_num_synchronous_data_packets: Some(buf.u16()?).filter(|&n| n > 0)
-        })
-    }
+    pub total_num_synchronous_data_packets: u16,
 }
 
 /// `HCI_Read_Local_Supported_Commands` return parameter
 /// ([Vol 4] Part E, Section 7.4.2).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Exstruct)]
 #[repr(transparent)]
 pub struct SupportedCommands([u8; 64]);
 
@@ -61,17 +49,9 @@ impl Default for SupportedCommands {
     }
 }
 
-impl FromEvent for SupportedCommands {
-
-    #[inline]
-    fn unpack(buf: &mut ReceiveBuffer) -> Result<Self, Error> {
-        buf.array().map(Self)
-    }
-}
-
 /// `HCI_Read_Local_Version_Information` return parameters
 /// ([Vol 4] Part E, Section 7.4.1).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Exstruct)]
 pub struct LocalVersion {
     pub hci_version: CoreVersion,
     pub hci_subversion: u16,
@@ -80,15 +60,3 @@ pub struct LocalVersion {
     pub lmp_subversion: u16,
 }
 
-impl FromEvent for LocalVersion {
-    #[inline]
-    fn unpack(buf: &mut ReceiveBuffer) -> Result<Self, Error> {
-        Ok(Self {
-            hci_version: CoreVersion::from(buf.u8()?),
-            hci_subversion: buf.u16()?,
-            lmp_version: CoreVersion::from(buf.u8()?),
-            company_id: CompanyId(buf.u16()?),
-            lmp_subversion: buf.u16()?,
-        })
-    }
-}

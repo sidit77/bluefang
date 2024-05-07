@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::{JoinHandle, spawn};
 use std::time::{Duration, SystemTime};
+use bytes::Bytes;
 use tracing::{error, info};
 
 const BTSNOOP_MAGIC: &[u8] = b"btsnoop\0";
@@ -13,7 +14,7 @@ const BTSNOOP_VERSION: u32 = 1;
 const BTSNOOP_FORMAT_MONITOR: u32 = 2001;
 
 pub struct LogWriter {
-    sender: Option<Sender<(SystemTime, PacketType, Vec<u8>)>>,
+    sender: Option<Sender<(SystemTime, PacketType, Bytes)>>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -32,7 +33,7 @@ impl LogWriter {
         }
     }
 
-    fn writer_thread(path: PathBuf, receiver: Receiver<(SystemTime, PacketType, Vec<u8>)>) -> std::io::Result<()> {
+    fn writer_thread(path: PathBuf, receiver: Receiver<(SystemTime, PacketType, Bytes)>) -> std::io::Result<()> {
         let mut file = BufWriter::new(File::create(&path)?);
         info!("Writing btsnoop log to {:?}", path);
         file.write_all(BTSNOOP_MAGIC)?;
@@ -61,9 +62,9 @@ impl LogWriter {
         Ok(())
     }
 
-    pub fn write(&self, packet_type: PacketType, data: &[u8]) {
+    pub fn write(&self, packet_type: PacketType, data: Bytes) {
         if let Some(sender) = &self.sender {
-            let _ = sender.send((SystemTime::now(), packet_type, data.to_vec()));
+            let _ = sender.send((SystemTime::now(), packet_type, data));
         }
     }
 }

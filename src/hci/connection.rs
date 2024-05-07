@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use bytes::Bytes;
+use instructor::Buffer;
 use tokio::spawn;
 use tokio::sync::mpsc::unbounded_channel;
 use tracing::{debug, trace, warn};
@@ -6,7 +8,6 @@ use crate::ensure;
 use crate::hci::consts::{ClassOfDevice, EventCode, LinkType, RemoteAddr, Role, Status};
 use crate::hci::{Error, Hci};
 use crate::hci::acl::AclDataAssembler;
-use crate::hci::event_loop::Event;
 
 pub fn handle_connection(hci: Arc<Hci>) -> Result<(), Error> {
     let mut events = {
@@ -34,14 +35,13 @@ pub fn handle_connection(hci: Arc<Hci>) -> Result<(), Error> {
     Ok(())
 }
 
-async fn handle_event(hci: &Hci, event: Event) -> Result<(), Error> {
-    let Event { code, mut data, .. } = event;
+async fn handle_event(hci: &Hci, (code, mut data): (EventCode, Bytes)) -> Result<(), Error> {
     match code {
         EventCode::ConnectionRequest => {
             // ([Vol 4] Part E, Section 7.7.4).
-            let addr = data.array().map(RemoteAddr::from)?;
-            let _class = data.u24().map(ClassOfDevice::from)?;
-            let link_type = data.u8().map(LinkType::from)?;
+            let addr: RemoteAddr = data.read_le()?;
+            let _class: ClassOfDevice = data.read_le()?;
+            let link_type: LinkType = data.read_le()?;
             data.finish()?;
 
             ensure!(link_type == LinkType::Acl, "Invalid link type");
@@ -49,7 +49,7 @@ async fn handle_event(hci: &Hci, event: Event) -> Result<(), Error> {
         },
         EventCode::PinCodeRequest => {
             // ([Vol 4] Part E, Section 7.7.22).
-            let addr = data.array().map(RemoteAddr::from)?;
+            let addr: RemoteAddr = data.read_le()?;
             data.finish()?;
 
             debug!("Pin code request: {}", addr);
@@ -57,9 +57,9 @@ async fn handle_event(hci: &Hci, event: Event) -> Result<(), Error> {
         },
         EventCode::LinkKeyNotification => {
             // ([Vol 4] Part E, Section 7.7.24).
-            let addr = data.array().map(RemoteAddr::from)?;
-            let key = data.array::<16>()?;
-            let key_type = data.u8()?;
+            let addr: RemoteAddr = data.read_le()?;
+            let key: [u8; 16] = data.read_le()?;
+            let key_type: u8 = data.read_le()?;
             data.finish()?;
 
             debug!("Link key notification: {} {:X?} 0x{:X}", addr, key, key_type);

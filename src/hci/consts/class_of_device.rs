@@ -1,5 +1,7 @@
 use std::fmt::{Debug, Formatter};
 use bitflags::bitflags;
+use instructor::{Buffer, BufferMut, Endian, Error, Exstruct, Instruct};
+use instructor::utils::u24;
 use num_enum::{FromPrimitive, IntoPrimitive};
 use crate::utils::DebugFn;
 
@@ -38,6 +40,20 @@ impl From<ClassOfDevice> for u32 {
         (value.major_service_classes.bits() as u32) << 13 |
             (value.major_device_classes as u32) << 8 |
             (value.minor_device_classes as u32)
+    }
+}
+
+impl<E: Endian> Instruct<E> for ClassOfDevice {
+    fn write_to_buffer<B: BufferMut + ?Sized>(&self, buffer: &mut B) {
+        let value: u32 = u32::from(*self);
+        buffer.write::<u24, E>(&value.try_into().unwrap());
+    }
+}
+
+impl<E: Endian> Exstruct<E> for ClassOfDevice {
+    fn read_from_buffer<B: Buffer + ?Sized>(buffer: &mut B) -> Result<Self, Error> {
+        let value = buffer.read::<u24, E>()?;
+        Ok(ClassOfDevice::from(u32::from(value)))
     }
 }
 

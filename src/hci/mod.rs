@@ -1,7 +1,5 @@
 pub mod consts;
 mod error;
-pub mod buffer;
-pub mod events;
 mod commands;
 // pub mod connection;
 pub mod acl;
@@ -13,6 +11,9 @@ use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
+use bytes::{BufMut, Bytes, BytesMut};
+use instructor::{Buffer, BufferMut, Exstruct, LittleEndian};
+use instructor::utils::Length;
 use nusb::transfer::TransferError;
 use parking_lot::Mutex;
 use tokio::spawn;
@@ -22,22 +23,19 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedSender as MpscSender};
 use tokio::sync::oneshot::Sender as OneshotSender;
 use tokio::time::sleep;
 use crate::host::usb::UsbHost;
-use crate::hci::buffer::{ReceiveBuffer, SendBuffer};
-use crate::hci::events::{FromEvent};
 use crate::hci::consts::{EventCode, Status};
 
 pub use commands::*;
-use crate::hci::acl::{AclDataPacket, BoundaryFlag, BroadcastFlag};
+use crate::hci::acl::{AclHeader, BoundaryFlag, BroadcastFlag};
 use crate::hci::event_loop::{EventLoopCommand};
-pub use event_loop::Event;
 
 
 //TODO make generic over transport
 pub struct Hci {
     //transport: UsbHost,
     //router: Arc<EventRouter>,
-    cmd_out: MpscSender<(Opcode, SendBuffer, OneshotSender<Result<ReceiveBuffer, TransferError>>)>,
-    acl_out: MpscSender<AclDataPacket>,
+    cmd_out: MpscSender<(Opcode, Bytes, OneshotSender<Result<Bytes, TransferError>>)>,
+    acl_out: MpscSender<Bytes>,
     ctl_out: MpscSender<EventLoopCommand>,
     acl_size: usize,
     event_loop: Mutex<Option<JoinHandle<()>>>
@@ -77,7 +75,7 @@ impl Hci {
         Ok(hci)
     }
 
-    pub fn register_event_handler(&self, events: impl Into<BTreeSet<EventCode>>, handler: MpscSender<Event>) -> Result<(), Error> {
+    pub fn register_event_handler(&self, events: impl Into<BTreeSet<EventCode>>, handler: MpscSender<(EventCode, Bytes)>) -> Result<(), Error> {
         let events = events.into();
         debug_assert!(!events.is_empty());
         debug_assert!(!events.contains(&EventCode::CommandComplete));
@@ -88,48 +86,51 @@ impl Hci {
         }).map_err(|_| Error::EventLoopClosed)
     }
 
-    pub fn register_data_handler(&self, handler: MpscSender<AclDataPacket>) -> Result<(), Error> {
+    pub fn register_data_handler(&self, handler: MpscSender<Bytes>) -> Result<(), Error> {
         self.ctl_out.send(EventLoopCommand::RegisterAclDataHandler {
             handler
         }).map_err(|_| Error::EventLoopClosed)
     }
 
-    pub fn send_acl_data(&self, handle: u16, pdu: &[u8]) -> Result<(), Error> {
+    pub fn send_acl_data(&self, handle: u16, pdu: Bytes) -> Result<(), Error> {
         trace!("Sending ACL data to handle 0x{:04X}", handle);
+        let mut buffer = BytesMut::with_capacity(512);
         let mut pb = BoundaryFlag::FirstNonAutomaticallyFlushable;
         for chunk in pdu.chunks(self.acl_size) {
-            self.acl_out.send(AclDataPacket {
+            buffer.write(&AclHeader {
                 handle,
                 pb,
                 bc: BroadcastFlag::PointToPoint,
-                data: chunk.to_vec()
-            }).map_err(|_| Error::EventLoopClosed)?;
+                length: Length::with_offset(chunk.len())?
+            });
+            buffer.put(chunk);
+            self.acl_out.send(buffer.split().freeze()).map_err(|_| Error::EventLoopClosed)?;
             pb = BoundaryFlag::Continuing;
         }
         Ok(())
     }
 
-    pub async fn call<T: FromEvent>(&self, cmd: Opcode) -> Result<T, Error> {
+    pub async fn call<T: Exstruct<LittleEndian>>(&self, cmd: Opcode) -> Result<T, Error> {
         self.call_with_args(cmd, |_| {}).await
     }
 
-    pub async fn call_with_args<T: FromEvent>(&self, cmd: Opcode, packer: impl FnOnce(&mut SendBuffer)) -> Result<T, Error> {
+    pub async fn call_with_args<T: Exstruct<LittleEndian>>(&self, cmd: Opcode, packer: impl FnOnce(&mut BytesMut)) -> Result<T, Error> {
         // TODO: check if the command is supported
-        let mut buf = SendBuffer::default();
-        buf.u16(cmd);
-        buf.u8(0);
+        let mut buf = BytesMut::with_capacity(255);
+        buf.write::<u16, LittleEndian>(&cmd.into());
+        buf.write::<u8, LittleEndian>(&0);
         packer(&mut buf);
         let payload_len = u8::try_from(buf.len() - 3).map_err(|_| Error::PayloadTooLarge)?;
-        buf.set_u8(2, payload_len);
+        buf[2] = payload_len;
 
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.cmd_out.send((cmd, buf, tx)).map_err(|_| Error::EventLoopClosed)?;
+        self.cmd_out.send((cmd, buf.freeze(), tx)).map_err(|_| Error::EventLoopClosed)?;
         //TODO: 1s timeout
         let mut resp = rx.await.map_err(|_| Error::EventLoopClosed)??;
-        let status = Status::from(resp.u8()?);
+        let status: Status = resp.read_le()?;
         match status {
             Status::Success => {
-                let result = T::unpack(&mut resp)?;
+                let result: T = resp.read_le()?;
                 resp.finish()?;
                 Ok(result)
             }
@@ -165,13 +166,11 @@ pub enum Error {
     #[error(transparent)]
     TransportError(#[from] nusb::Error),
     #[error(transparent)]
-    TransferError(#[from] nusb::transfer::TransferError),
+    TransferError(#[from] TransferError),
     #[error("Payload exceeds maximum size (255)")]
     PayloadTooLarge,
-    #[error("HCI Event has an invalid size")]
-    BadEventPacketSize,
-    #[error("HCI Event has an invalid value")]
-    BadEventPacketValue,
+    #[error("Malformed packet: {0:?}")]
+    BadPacket(#[from] instructor::Error),
     #[error("Event loop closed")]
     EventLoopClosed,
     #[error("Unknown HCI Event code: 0x{0:02X}")]
@@ -190,6 +189,12 @@ impl Error {
             Error::TransportError(err) => err.kind() == std::io::ErrorKind::TimedOut,
             _ => false
         }
+    }
+}
+
+impl From<&'static str> for Error {
+    fn from(value: &'static str) -> Self {
+        Self::Generic(value)
     }
 }
 

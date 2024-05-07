@@ -1,8 +1,8 @@
 use std::fmt::{Display, Formatter};
-use num_enum::{TryFromPrimitive, FromPrimitive, IntoPrimitive};
+use instructor::{Exstruct, Instruct};
 
 /// HCI event codes ([Vol 4] Part E, Section 7.7).
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, TryFromPrimitive)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Exstruct)]
 #[repr(u8)]
 pub enum EventCode {
     InquiryComplete = 0x01,
@@ -73,7 +73,7 @@ pub enum EventCode {
 }
 
 /// HCI status codes ([Vol 1] Part F, Section 1.3).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, FromPrimitive, IntoPrimitive)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Instruct, Exstruct)]
 #[non_exhaustive]
 #[repr(u8)]
 pub enum Status {
@@ -108,7 +108,7 @@ pub enum Status {
     ScoIntervalRejected = 0x1C,
     ScoAirModeRejected = 0x1D,
     InvalidLmpLlParameters = 0x1E,
-    #[num_enum(default)] // [Vol 4] Part E, Section 1.2
+    #[instructor(default)] // [Vol 4] Part E, Section 1.2
     UnspecifiedError = 0x1F,
     UnsupportedLmpLlParameterValue = 0x20,
     RoleChangeNotAllowed = 0x21,

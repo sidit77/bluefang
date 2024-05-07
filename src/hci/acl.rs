@@ -1,26 +1,27 @@
-use num_enum::{IntoPrimitive, TryFromPrimitive};
+use bytes::{BufMut, Bytes, BytesMut};
+use instructor::{Exstruct, Instruct};
+use instructor::utils::Length;
 use tracing::warn;
-use crate::ensure;
 // use crate::l2cap::Error;
 use crate::utils::SliceExt;
 
 #[derive(Default)]
 pub struct AclDataAssembler {
-    buffer: Vec<u8>,
+    buffer: BytesMut,
     l2cap_pdu_length: usize,
     in_progress: bool,
 }
 
 impl AclDataAssembler {
-    pub fn push(&mut self, packet: AclDataPacket) -> Option<Vec<u8>> {
-        if packet.pb.is_first() {
+    pub fn push(&mut self, header: AclHeader, data: Bytes) -> Option<Bytes> {
+        if header.pb.is_first() {
             debug_assert!(!self.in_progress);
-            if let Some(l2cap_pdu_length) = packet.data
+            if let Some(l2cap_pdu_length) = data
                 .get_chunk(0)
                 .copied()
                 .map(u16::from_le_bytes) {
                 self.buffer.clear();
-                self.buffer.extend_from_slice(&packet.data);
+                self.buffer.put(data);
                 self.l2cap_pdu_length = l2cap_pdu_length as usize;
                 self.in_progress = true;
             } else {
@@ -29,7 +30,7 @@ impl AclDataAssembler {
             }
         } else {
             if self.in_progress {
-                self.buffer.extend_from_slice(&packet.data);
+                self.buffer.put(data);
             } else {
                 warn!("A continuation packet should not be the first packet");
                 return None;
@@ -40,7 +41,7 @@ impl AclDataAssembler {
             std::cmp::Ordering::Less => None,
             std::cmp::Ordering::Equal => {
                 self.in_progress = false;
-                Some(std::mem::take(&mut self.buffer))
+                Some(self.buffer.split().freeze())
             }
             std::cmp::Ordering::Greater => {
                 warn!("L2CAP PDU length exceeded");
@@ -52,40 +53,21 @@ impl AclDataAssembler {
 }
 
 // ([Vol 4] Part E, Section 5.4.2).
-#[derive(Debug, Clone)]
-pub struct AclDataPacket {
+#[derive(Debug, Copy, Clone, Exstruct, Instruct)]
+#[instructor(endian = "little")]
+pub struct AclHeader {
+    #[instructor(bitfield(u16))]
+    #[instructor(bits(0..12))]
     pub handle: u16,
+    #[instructor(bits(12..14))]
     pub pb: BoundaryFlag,
+    #[instructor(bits(14..16))]
     pub bc: BroadcastFlag,
-    pub data: Vec<u8>,
-}
-
-impl AclDataPacket {
-    pub fn from_bytes(data: &[u8]) -> Option<Self> {
-        let hdr = u16::from_le_bytes(*data.get_chunk(0)?);
-        let handle = hdr & 0xFFF;
-        let pb = BoundaryFlag::try_from(((hdr >> 12) & 0b11) as u8).ok()?;
-        let bc = BroadcastFlag::try_from(((hdr >> 14) & 0b11) as u8).ok()?;
-        let len = u16::from_le_bytes(*data.get_chunk(2)?) as usize;
-        let data = &data[4..];
-        ensure!(data.len() == len);
-        Some(Self { handle, pb, bc, data: data.to_vec() })
-    }
-
-    pub fn into_vec(mut self) -> Vec<u8> {
-        let len = self.data.len() as u16;
-        let mut hdr = self.handle;
-        hdr |= (self.pb as u16) << 12;
-        hdr |= (self.bc as u16) << 14;
-        self.data.extend_from_slice(&hdr.to_le_bytes());
-        self.data.extend_from_slice(&len.to_le_bytes());
-        self.data.rotate_right(4);
-        self.data
-    }
+    pub length: Length<u16, 0>
 }
 
 // ([Vol 4] Part E, Section 5.4.2).
-#[derive(Debug, Copy, Clone, Eq, PartialEq, TryFromPrimitive, IntoPrimitive)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Instruct, Exstruct)]
 #[repr(u8)]
 pub enum BoundaryFlag {
     FirstNonAutomaticallyFlushable = 0b00,
@@ -100,7 +82,7 @@ impl BoundaryFlag {
 }
 
 // ([Vol 4] Part E, Section 5.4.2).
-#[derive(Debug, Copy, Clone, Eq, PartialEq, TryFromPrimitive, IntoPrimitive)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Instruct, Exstruct)]
 #[repr(u8)]
 pub enum BroadcastFlag {
     PointToPoint = 0b00,

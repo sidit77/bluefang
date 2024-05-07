@@ -2,21 +2,21 @@ mod signaling;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use num_enum::{IntoPrimitive, TryFromPrimitive};
+use bytes::Bytes;
+use instructor::{Buffer, Exstruct, Instruct};
+use instructor::utils::Length;
 use smallvec::SmallVec;
 use tokio::{select, spawn};
 use tokio::sync::mpsc::unbounded_channel;
-use tracing::{debug, error, trace, warn};
-use crate::{ensure, hci};
-use crate::hci::acl::{AclDataAssembler, AclDataPacket};
+use tracing::{debug, trace, warn};
+use crate::hci::acl::{AclDataAssembler, AclHeader};
 use crate::hci::consts::{EventCode, LinkType, RemoteAddr, Status};
-use crate::hci::{Error, Event, Hci};
-use crate::utils::SliceExt;
+use crate::hci::{Error, Hci};
 
 const CID_ID_NONE: u16 = 0x0000;
 const CID_ID_SIGNALING: u16 = 0x0001;
 
-pub fn start_l2cap_server(hci: Arc<Hci>) -> Result<(), hci::Error> {
+pub fn start_l2cap_server(hci: Arc<Hci>) -> Result<(), Error> {
     let mut data = {
         let (tx, rx) = unbounded_channel();
         hci.register_data_handler(tx)?;
@@ -78,16 +78,15 @@ impl State {
         self.connections.get_mut(&handle).ok_or(Error::UnknownConnectionHandle(handle))
     }
 
-    fn handle_event(&mut self, event: Event) -> Result<(), Error> {
-        let Event { code, mut data, .. } = event;
+    fn handle_event(&mut self, (code, mut data): (EventCode, Bytes)) -> Result<(), Error> {
         match code {
             EventCode::ConnectionComplete => {
                 // ([Vol 4] Part E, Section 7.7.3).
-                let status = data.u8().map(Status::from)?;
-                let handle = data.u16()?;
-                let addr = data.array().map(RemoteAddr::from)?;
-                let link_type = data.u8().map(LinkType::from)?;
-                let _encryption_enabled = data.u8().map(|b| b == 0x01)?;
+                let status: Status = data.read_le()?;
+                let handle: u16 = data.read_le()?;
+                let addr: RemoteAddr = data.read_le()?;
+                let link_type: LinkType = data.read_le()?;
+                let _encryption_enabled = data.read_le::<u8>().map(|b| b == 0x01)?;
                 data.finish()?;
 
                 assert_eq!(link_type, LinkType::Acl);
@@ -107,9 +106,9 @@ impl State {
             },
             EventCode::DisconnectionComplete => {
                 // ([Vol 4] Part E, Section 7.7.5).
-                let status = data.u8().map(Status::from)?;
-                let handle = data.u16()?;
-                let reason = data.u8().map(Status::from)?;
+                let status: Status = data.read_le()?;
+                let handle: u16 = data.read_le()?;
+                let reason: Status = data.read_le()?;
                 data.finish()?;
 
                 self.connections.remove(&handle);
@@ -121,8 +120,8 @@ impl State {
             },
             EventCode::MaxSlotsChange => {
                 // ([Vol 4] Part E, Section 7.7.27).
-                let handle = data.u16()?;
-                let max_slots = data.u8()?;
+                let handle: u16 = data.read_le()?;
+                let max_slots: u8 = data.read_le()?;
                 data.finish()?;
                 self.get_connection(handle)?.max_slots = max_slots;
                 debug!("Max slots change: {:?} {:?}", handle, max_slots);
@@ -132,26 +131,23 @@ impl State {
         Ok(())
     }
 
-    fn handle_data(&mut self, data: AclDataPacket) -> Result<(), Error> {
+    fn handle_data(&mut self, mut data: Bytes) -> Result<(), Error> {
         debug!("ACL data: {:02X?}", data);
-        let handle = data.handle;
-        if let Some(pdu) = self.get_connection(handle)?.assembler.push(data) {
-            self.handle_l2cap_packet(handle, &pdu)?;
+        let header: AclHeader = data.read()?;
+        if let Some(pdu) = self.get_connection(header.handle)?.assembler.push(header, data) {
+            self.handle_l2cap_packet(header.handle, pdu)?;
         }
         Ok(())
     }
 
     // ([Vol 3] Part A, Section 3.1).
-    fn handle_l2cap_packet(&mut self, handle: u16, data: &[u8]) -> Result<(), Error> {
-        let len = u16::from_le_bytes(*data.get_chunk(0).ok_or(Error::BadEventPacketSize)?);
-        let cid = u16::from_le_bytes(*data.get_chunk(2).ok_or(Error::BadEventPacketSize)?);
-        let data = &data[4..];
-        ensure!(data.len() == len as usize, Error::BadEventPacketSize);
+    fn handle_l2cap_packet(&mut self, handle: u16, mut data: Bytes) -> Result<(), Error> {
+        let L2capHeader { cid, ..} = data.read()?;
 
         debug!("    L2CAP header: cid={:04X}", cid);
         // ([Vol 3] Part A, Section 2.1).
         match cid {
-            CID_ID_NONE => Err(Error::BadEventPacketValue),
+            CID_ID_NONE => Err(Error::BadPacket(instructor::Error::InvalidValue)),
             CID_ID_SIGNALING => self.handle_l2cap_signaling(handle, data),
             _ => {
                 warn!("Unhandled L2CAP CID: {:04X}", cid);
@@ -164,32 +160,15 @@ impl State {
 
 }
 
-
-// ([Vol 3] Part A, Section 4).
-#[derive(Debug, Copy, Clone, Eq, PartialEq, TryFromPrimitive, IntoPrimitive)]
-#[repr(u8)]
-enum SignalingCodes {
-    CommandReject = 0x01,
-    ConnectionRequest = 0x02,
-    ConnectionResponse = 0x03,
-    ConfigureRequest = 0x04,
-    ConfigureResponse = 0x05,
-    DisconnectionRequest = 0x06,
-    DisconnectionResponse = 0x07,
-    EchoRequest = 0x08,
-    EchoResponse = 0x09,
-    InformationRequest = 0x0A,
-    InformationResponse = 0x0B,
-    ConnectionParameterUpdateRequest = 0x12,
-    ConnectionParameterUpdateResponse = 0x13,
-    LECreditBasedConnectionRequest = 0x14,
-    LECreditBasedConnectionResponse = 0x15,
-    FlowControlCreditIndex = 0x16,
-    CreditBasedConnectionRequest = 0x17,
-    CreditBasedConnectionResponse = 0x18,
-    CreditBasedReconfigurationRequest = 0x19,
-    CreditBasedReconfigurationResponse = 0x1A,
+// ([Vol 3] Part A, Section 3.1).
+#[derive(Debug, Exstruct, Instruct)]
+#[instructor(endian = "little")]
+struct L2capHeader {
+    len: Length<u16, 2>,
+    cid: u16
 }
+
+
 
 #[derive(Default, Debug)]
 pub struct ReplyPacket(SmallVec<[u8; 32]>);
