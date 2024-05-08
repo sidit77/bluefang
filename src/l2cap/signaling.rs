@@ -4,8 +4,7 @@ use instructor::utils::Length;
 use tracing::{debug, error, warn};
 use crate::{ensure, log_assert};
 use crate::hci::Error;
-use crate::l2cap::{CID_ID_SIGNALING, L2capHeader, ReplyPacket, State};
-use crate::utils::SliceExt;
+use crate::l2cap::{CID_ID_SIGNALING, ConnectionResult, ConnectionStatus, L2capHeader, Server, State};
 
 impl State {
     // ([Vol 3] Part A, Section 4).
@@ -16,7 +15,7 @@ impl State {
         debug!("      L2CAP signaling: code={:?} id={:02X}", code, id);
         let reply = match code {
             SignalingCodes::InformationRequest => Some((SignalingCodes::InformationResponse, self.handle_information_request(data)?)),
-            // SignalingCodes::ConnectionRequest => Some((SignalingCodes::ConnectionResponse, self.handle_connection_request(data)?)),
+            SignalingCodes::ConnectionRequest => Some((SignalingCodes::ConnectionResponse, self.handle_connection_request(data)?)),
             _ => {
                 warn!("        Unsupported");
                 // ([Vol 3] Part A, Section 4.1).
@@ -40,8 +39,20 @@ impl State {
         Ok(())
     }
 
-    // ([Vol 3] Part A, Section 4.2).
-    //fn handle_connection_request(&mut self, data: Bytes) -> Result<BytesMut::new(), Error> {
+     // ([Vol 3] Part A, Section 4.2).
+    fn handle_connection_request(&mut self, mut data: Bytes) -> Result<BytesMut, Error> {
+         let psm: u64 = data.read_le::<Psm>()?.0;
+         let scid: u16 = data.read_le()?;
+         let resp = self.handle_channel_connection(psm, scid);
+
+         let mut reply = BytesMut::new();
+         reply.write_le(&resp.ok().unwrap_or_default());
+         reply.write_le(&scid);
+         reply.write_le(&resp.err().unwrap_or(ConnectionResult::Success));
+         reply.write_le(&ConnectionStatus::NoFurtherInformation);
+
+         Ok(reply)
+    }
 //
     //    let (psm, scid) = {
     //        let mut value = 0u64;
@@ -164,4 +175,25 @@ enum SignalingCodes {
     CreditBasedConnectionResponse = 0x18,
     CreditBasedReconfigurationRequest = 0x19,
     CreditBasedReconfigurationResponse = 0x1A,
+}
+
+// ([Vol 3] Part A, Section 4.2).
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+struct Psm(pub u64);
+
+impl Exstruct<LittleEndian> for Psm {
+    fn read_from_buffer<B: Buffer + ?Sized>(buffer: &mut B) -> Result<Self, instructor::Error> {
+        let mut value = 0u64;
+        let mut index = 0;
+        loop {
+            let octet: u8 = buffer.read_le()?;
+            value |= (octet as u64) << (index as u64 * 8);
+            if octet & 0x01 == 0 {
+                break;
+            }
+            index += 1;
+            ensure!(index < 8, instructor::Error::InvalidValue);
+        }
+        Ok(Self(value))
+    }
 }

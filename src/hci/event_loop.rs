@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::pending;
 use std::mem::size_of;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use instructor::{Buffer, Exstruct};
 use instructor::utils::Length;
 use nusb::transfer::{ControlOut, ControlType, Recipient, RequestBuffer, TransferError};

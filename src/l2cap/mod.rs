@@ -1,22 +1,26 @@
 mod signaling;
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 use std::sync::Arc;
 use bytes::Bytes;
 use instructor::{Buffer, Exstruct, Instruct};
 use instructor::utils::Length;
-use smallvec::SmallVec;
 use tokio::{select, spawn};
 use tokio::sync::mpsc::unbounded_channel;
 use tracing::{debug, trace, warn};
+use crate::ensure;
 use crate::hci::acl::{AclDataAssembler, AclHeader};
 use crate::hci::consts::{EventCode, LinkType, RemoteAddr, Status};
 use crate::hci::{Error, Hci};
 
 const CID_ID_NONE: u16 = 0x0000;
 const CID_ID_SIGNALING: u16 = 0x0001;
+const CID_RANGE_DYNAMIC: Range<u16> = 0x0040..0xFFFF;
 
 pub fn start_l2cap_server(hci: Arc<Hci>) -> Result<(), Error> {
+    let mut servers: BTreeMap<u64, Box<dyn Server + Send>> = BTreeMap::new();
+    servers.insert(0x01, Box::new(SdpServer));
     let mut data = {
         let (tx, rx) = unbounded_channel();
         hci.register_data_handler(tx)?;
@@ -37,6 +41,8 @@ pub fn start_l2cap_server(hci: Arc<Hci>) -> Result<(), Error> {
         let mut state = State {
             hci,
             connections: Default::default(),
+            servers,
+            channels: Default::default(),
         };
 
         loop {
@@ -70,6 +76,8 @@ struct PhysicalConnection {
 struct State {
     hci: Arc<Hci>,
     connections: BTreeMap<u16, PhysicalConnection>,
+    servers: BTreeMap<u64, Box<dyn Server + Send>>,
+    channels: BTreeMap<u16, Channel>,
 }
 
 impl State {
@@ -149,14 +157,39 @@ impl State {
         match cid {
             CID_ID_NONE => Err(Error::BadPacket(instructor::Error::InvalidValue)),
             CID_ID_SIGNALING => self.handle_l2cap_signaling(handle, data),
-            _ => {
-                warn!("Unhandled L2CAP CID: {:04X}", cid);
-                Ok(())
+            _ => match self.channels.get(&cid) {
+                Some(channel) => {
+                    debug!("        Channel {:?}", channel);
+                    Ok(())
+                },
+                None => {
+                    warn!("Unhandled L2CAP CID: {:04X}", cid);
+                    Ok(())
+                }
             },
         }
     }
 
+    fn handle_channel_connection(&mut self, psm: u64, scid: u16) -> Result<u16, ConnectionResult> {
+        debug!("        Connection request: PSM={:04X} SCID={:04X}", psm, scid);
+        let server = self.servers.get_mut(&psm).ok_or(ConnectionResult::RefusedPsmNotSupported)?;
+        //ensure!(self.servers.contains_key(&psm), ConnectionResult::RefusedPsmNotSupported);
+        ensure!(CID_RANGE_DYNAMIC.contains(&scid), ConnectionResult::RefusedInvalidSourceCid);
+        //TODO check if source cid already exists for physical connection
 
+        let dcid = CID_RANGE_DYNAMIC
+            .find(|&cid| !self.channels.contains_key(&cid))
+            .ok_or(ConnectionResult::RefusedNoResources)?;
+
+        let channel = Channel {
+            remote_cid: scid,
+            local_cid: dcid,
+        };
+        self.channels.insert(dcid, channel);
+        server.on_connection(channel);
+
+        Ok(dcid)
+    }
 
 }
 
@@ -168,25 +201,45 @@ struct L2capHeader {
     cid: u16
 }
 
-
-
-#[derive(Default, Debug)]
-pub struct ReplyPacket(SmallVec<[u8; 32]>);
-
-impl ReplyPacket {
-
-    pub fn prepend<const N: usize>(&mut self, data: [u8; N]) {
-        self.0.insert_many(0, data);
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Instruct)]
+#[repr(u16)]
+pub enum ConnectionResult {
+    Success = 0x0000,
+    Pending = 0x0001,
+    RefusedPsmNotSupported = 0x0002,
+    RefusedSecurityBlock = 0x0003,
+    RefusedNoResources = 0x0004,
+    RefusedInvalidSourceCid = 0x0006,
+    RefusedSourceCidAlreadyAllocated = 0x0007,
 }
 
-impl AsRef<[u8]> for ReplyPacket {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_ref()
-    }
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Instruct)]
+#[repr(u16)]
+pub enum ConnectionStatus {
+    #[default]
+    NoFurtherInformation = 0x0000,
+    AuthenticationPending = 0x0001,
+    AuthorizationPending = 0x0002,
 }
 
+#[derive(Debug, Copy, Clone)]
+struct Channel {
+    remote_cid: u16,
+    local_cid: u16
+}
+
+trait Server {
+
+    fn on_connection(&mut self, channel: Channel);
+
+}
+
+struct SdpServer;
+
+impl Server for SdpServer {
+
+    fn on_connection(&mut self, _channel: Channel) {
+        debug!("SDP connection");
+    }
+
+}
