@@ -1,5 +1,8 @@
 use std::sync::Arc;
 use anyhow::Context;
+use bytes::BytesMut;
+use instructor::{BufferMut, DoubleEndedBufferMut};
+use instructor::utils::Length;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -9,7 +12,8 @@ use redtooth::hci::connection::handle_connection;
 use redtooth::hci::consts::{ClassOfDevice, MajorDeviceClass, MajorServiceClasses};
 use redtooth::hci::Hci;
 use redtooth::host::usb::UsbController;
-use redtooth::l2cap::start_l2cap_server;
+use redtooth::l2cap::signaling::{SignalingCodes, SignalingHeader};
+use redtooth::l2cap::{L2capHeader, start_l2cap_server};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -20,8 +24,8 @@ async fn main() -> anyhow::Result<()> {
 
     Hci::register_firmware_loader(RealTekFirmwareLoader::new());
 
-    //let usb = UsbController::list(|info| info.vendor_id() == 0x2B89)?
-    let usb = UsbController::list(|info| info.vendor_id() == 0x10D7)?
+    let usb = UsbController::list(|info| info.vendor_id() == 0x2B89)?
+    //let usb = UsbController::list(|info| info.vendor_id() == 0x10D7)?
         .next()
         .context("failed to find device")?
         .claim()?;

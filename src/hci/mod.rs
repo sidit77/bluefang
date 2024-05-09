@@ -92,22 +92,11 @@ impl Hci {
         }).map_err(|_| Error::EventLoopClosed)
     }
 
-    pub fn send_acl_data(&self, handle: u16, pdu: Bytes) -> Result<(), Error> {
-        trace!("Sending ACL data to handle 0x{:04X}", handle);
-        let mut buffer = BytesMut::with_capacity(512);
-        let mut pb = BoundaryFlag::FirstNonAutomaticallyFlushable;
-        for chunk in pdu.chunks(self.acl_size) {
-            buffer.write(&AclHeader {
-                handle,
-                pb,
-                bc: BroadcastFlag::PointToPoint,
-                length: Length::with_offset(chunk.len())?
-            });
-            buffer.put(chunk);
-            self.acl_out.send(buffer.split().freeze()).map_err(|_| Error::EventLoopClosed)?;
-            pb = BoundaryFlag::Continuing;
+    pub fn get_acl_sender(&self) -> AclSender {
+        AclSender {
+            sender: self.acl_out.clone(),
+            max_size: self.acl_size
         }
-        Ok(())
     }
 
     pub async fn call<T: Exstruct<LittleEndian>>(&self, cmd: Opcode) -> Result<T, Error> {
@@ -151,6 +140,31 @@ impl Hci {
     }
 
 }
+#[derive(Clone)]
+pub struct AclSender {
+    sender: MpscSender<Bytes>,
+    max_size: usize
+}
+
+impl AclSender {
+    pub fn send(&self, handle: u16, pdu: Bytes) -> Result<(), Error> {
+        trace!("Sending ACL data to handle 0x{:04X}", handle);
+        let mut buffer = BytesMut::with_capacity(512);
+        let mut pb = BoundaryFlag::FirstNonAutomaticallyFlushable;
+        for chunk in pdu.chunks(self.max_size) {
+            buffer.write(&AclHeader {
+                handle,
+                pb,
+                bc: BroadcastFlag::PointToPoint,
+                length: Length::new(chunk.len())?
+            });
+            buffer.put(chunk);
+            self.sender.send(buffer.split().freeze()).map_err(|_| Error::EventLoopClosed)?;
+            pb = BoundaryFlag::Continuing;
+        }
+        Ok(())
+    }
+}
 
 //impl Drop for Hci {
 //    fn drop(&mut self) {
@@ -180,7 +194,9 @@ pub enum Error {
     #[error("Unknown connection handle: 0x{0:02X}")]
     UnknownConnectionHandle(u16),
     #[error(transparent)]
-    Controller(#[from] Status)
+    Controller(#[from] Status),
+    #[error("Unknown channel id: 0x{0:02X}")]
+    UnknownChannelId(u16),
 }
 
 impl Error {

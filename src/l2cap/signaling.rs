@@ -1,142 +1,168 @@
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use instructor::{Buffer, BufferMut, DoubleEndedBufferMut, Exstruct, Instruct, LittleEndian};
 use instructor::utils::Length;
 use tracing::{debug, error, warn};
 use crate::{ensure, log_assert};
 use crate::hci::Error;
-use crate::l2cap::{CID_ID_SIGNALING, ConnectionResult, ConnectionStatus, L2capHeader, Server, State};
+use crate::l2cap::{ChannelEvent, CID_ID_SIGNALING, ConfigureResult, ConnectionResult, ConnectionStatus, L2capHeader, Server, State};
+
+#[derive(Debug, Copy, Clone)]
+struct SignalingContext {
+    handle: u16,
+    id: u8,
+}
 
 impl State {
+    fn send_response<F: FnOnce(&mut BytesMut)>(&self, ctx: SignalingContext, code: SignalingCodes, writer: F) -> Result<(), Error> {
+        let mut data = BytesMut::new();
+        writer(&mut data);
+        data.write_front(&SignalingHeader {
+            code,
+            id: ctx.id,
+            length: Length::new(data.len())?,
+        });
+        data.write_front(&L2capHeader {
+            len: Length::new(data.len())?,
+            cid: CID_ID_SIGNALING,
+        });
+        self.sender.send(ctx.handle, data.freeze())?;
+        Ok(())
+    }
+
     // ([Vol 3] Part A, Section 4).
     pub fn handle_l2cap_signaling(&mut self, handle: u16, mut data: Bytes) -> Result<(), Error> {
         // TODO: Send reject response when signal code or cid is unknown
         // TODO: Handle more than one command per packet
         let SignalingHeader { code, id, .. } = data.read()?;
+        let ctx = SignalingContext { handle, id };
         debug!("      L2CAP signaling: code={:?} id={:02X}", code, id);
-        let reply = match code {
-            SignalingCodes::InformationRequest => Some((SignalingCodes::InformationResponse, self.handle_information_request(data)?)),
-            SignalingCodes::ConnectionRequest => Some((SignalingCodes::ConnectionResponse, self.handle_connection_request(data)?)),
+        match code {
+            SignalingCodes::CommandReject => {
+                let reason: RejectReason = data.read()?;
+                data.finish()?;
+                error!("        Command reject: {:?}", reason);
+            },
+            SignalingCodes::ConnectionRequest => self.handle_connection_request(ctx, data)?,
+            SignalingCodes::ConfigureRequest => self.handle_configuration_request(ctx, data)?,
+            SignalingCodes::ConfigureResponse => self.handle_configuration_response(ctx, data)?,
+            SignalingCodes::DisconnectionRequest => self.handle_disconnect_request(ctx, data)?,
+            SignalingCodes::EchoRequest => self.handle_echo_request(ctx, data)?,
+            SignalingCodes::InformationRequest => self.handle_information_request(ctx, data)?,
             _ => {
                 warn!("        Unsupported");
-                // ([Vol 3] Part A, Section 4.1).
-                let mut reply = BytesMut::new();
-                reply.write_le(&0x0000u16); // Command not understood.
-                Some((SignalingCodes::CommandReject, reply))
+                self.send_response(ctx, SignalingCodes::CommandReject, |data| {
+                    data.write_le(&RejectReason::CommandNotUnderstood);
+                })?;
             },
         };
-        if let Some((code, mut reply)) = reply {
-            reply.write_front(&SignalingHeader {
-                code,
-                id,
-                length: Length::with_offset(reply.len())?,
-            });
-            reply.write_front(&L2capHeader {
-                len: Length::with_offset(reply.len())?,
-                cid: CID_ID_SIGNALING,
-            });
-            self.hci.send_acl_data(handle, reply.freeze())?;
-        }
         Ok(())
     }
 
      // ([Vol 3] Part A, Section 4.2).
-    fn handle_connection_request(&mut self, mut data: Bytes) -> Result<BytesMut, Error> {
-         let psm: u64 = data.read_le::<Psm>()?.0;
-         let scid: u16 = data.read_le()?;
-         let resp = self.handle_channel_connection(psm, scid);
+    fn handle_connection_request(&mut self, ctx: SignalingContext, mut data: Bytes) -> Result<(), Error> {
+        let psm: u64 = data.read_le::<Psm>()?.0;
+        let scid: u16 = data.read_le()?;
+        data.finish()?;
+        let resp = self.handle_channel_connection(ctx.handle, psm, scid);
 
-         let mut reply = BytesMut::new();
-         reply.write_le(&resp.ok().unwrap_or_default());
-         reply.write_le(&scid);
-         reply.write_le(&resp.err().unwrap_or(ConnectionResult::Success));
-         reply.write_le(&ConnectionStatus::NoFurtherInformation);
-
-         Ok(reply)
+        self.send_response(ctx, SignalingCodes::ConnectionResponse, |data| {
+            data.write_le(&resp.ok().unwrap_or_default());
+            data.write_le(&scid);
+            data.write_le(&resp.err().unwrap_or(ConnectionResult::Success));
+            data.write_le(&ConnectionStatus::NoFurtherInformation);
+        })?;
+        Ok(())
     }
-//
-    //    let (psm, scid) = {
-    //        let mut value = 0u64;
-    //        let mut index = 0;
-    //        loop {
-    //            let octet = *data.get(index).ok_or(Error::BadEventPacketSize)?;
-    //            value |= (octet as u64) << (index as u64 * 8);
-    //            if octet & 0x01 == 0 {
-    //                break;
-    //            }
-    //            index += 1;
-    //            assert!(index < 8, "PSM too long");
-    //        }
-    //        (value, u16::from_le_bytes(*data.get_chunk(index + 1).ok_or(Error::BadEventPacketSize)?))
-    //    };
-    //    debug!("        Connection request: PSM={:04X} SCID={:04X}", psm, scid);
-//
-    //    let dcid = 0x0080u16; //TODO: fill in the real value
-//
-    //    let mut reply = ReplyPacket::default();
-    //    reply.prepend(0x0000u16.to_le_bytes()); // No further information available.
-    //    reply.prepend(0x0000u16.to_le_bytes()); // Connection successful.
-    //    reply.prepend(scid.to_le_bytes());
-    //    reply.prepend(dcid.to_le_bytes());
-//
-//
-    //    Ok(reply)
-    //}
 
     // ([Vol 3] Part A, Section 4.4).
-    //fn handle_configuration_request(&mut self, data: Bytes) -> Result<BytesMut, Error> {
-    //    let dcid = u16::from_le_bytes(*data.get_chunk(0).ok_or(Error::BadEventPacketSize)?);
-    //    let flags = u16::from_le_bytes(*data.get_chunk(2).ok_or(Error::BadEventPacketSize)?);
-    //    //TODO handle continuation packets
-    //    log_assert!(flags & 0xFFFE == 0);
-    //    debug!("        Configuration request: DCID={:04X} flags={:04X}", dcid, flags);
-    //    let mut reply = BytesMut::new();
-    //
-    //    reply.prepend(0x0000u16.to_le_bytes()); // No further information available.
-    //    reply.prepend(0x0000u16.to_le_bytes()); // Success.
-    //    reply.prepend(dcid.to_le_bytes());
-    //    Ok(reply)
-    //}
+    fn handle_configuration_request(&mut self, ctx: SignalingContext, mut data: Bytes) -> Result<(), Error> {
+        let dcid: u16 = data.read_le()?;
+        let flags: u16 = data.read_le()?;
+        //TODO handle continuation packets
+        log_assert!(flags & 0xFFFE == 0);
+        debug!("        Configuration request: DCID={:04X} flags={:04X}", dcid, flags);
 
+        self.send_channel_msg(dcid, ChannelEvent::ConfigurationRequest(ctx.id, data))
+    }
 
+    // ([Vol 3] Part A, Section 4.5).
+    fn handle_configuration_response(&mut self, ctx: SignalingContext, mut data: Bytes) -> Result<(), Error> {
+        let scid: u16 = data.read_le()?;
+        let flags: u16 = data.read_le()?;
+        let result: ConfigureResult = data.read_le()?;
+        //TODO handle continuation packets
+        log_assert!(flags & 0xFFFE == 0);
+        debug!("        Configuration response: SCID={:04X} flags={:04X}", scid, flags);
+
+        self.send_channel_msg(scid, ChannelEvent::ConfigurationResponse(ctx.id, result, data))
+    }
+
+    // ([Vol 3] Part A, Section 4.6).
+    fn handle_disconnect_request(&mut self, ctx: SignalingContext, mut data: Bytes) -> Result<(), Error> {
+        let dcid: u16 = data.read_le()?;
+        let scid: u16 = data.read_le()?;
+        data.finish()?;
+        debug!("        Disconnect request: DCID={:04X} SCID={:04X}", dcid, scid);
+        match self.channels.remove(&dcid) {
+            Some(_) => self.send_response(ctx, SignalingCodes::DisconnectionResponse, |data| {
+                data.write_le(&dcid);
+                data.write_le(&scid);
+            })?,
+            None => self.send_response(ctx, SignalingCodes::CommandReject, |data| {
+                data.write_le(&RejectReason::InvalidCid { scid, dcid });
+            })?
+        }
+        Ok(())
+    }
+
+    fn handle_echo_request(&mut self, ctx: SignalingContext, data: Bytes) -> Result<(), Error> {
+        self.send_response(ctx, SignalingCodes::EchoResponse, |resp| {
+            resp.put(data);
+        })
+    }
 
     // ([Vol 3] Part A, Section 4.10).
-    fn handle_information_request(&mut self, mut data: Bytes) -> Result<BytesMut, Error> {
+    fn handle_information_request(&mut self, ctx: SignalingContext, mut data: Bytes) -> Result<(), Error> {
         let info_type: u16 = data.read_le()?;
         data.finish()?;
-        let mut reply = BytesMut::new();
-        match info_type {
-            0x0001 => {
-                debug!("        Connectionless MTU");
-                let mtu = 1024u16; //TODO: fill in the real value
-                reply.write_front::<_, LittleEndian>(&mtu);
-            }
-            0x0002 => {
-                debug!("        Local supported features");
-                // ([Vol 3] Part A, Section 4.12).
-                let mut features: u32 = 0;
-                //features |= 1 << 3; // Enhanced Retransmission Mode
-                //features |= 1 << 5; // FCS
-                features |= 1 << 7; // Fixed Channels supported over BR/EDR
-                features |= 1 << 9; // Unicast Connectionless Data Reception
+        self.send_response(ctx, SignalingCodes::InformationResponse, |data| {
+            data.write_le(&info_type);
+            match info_type {
+                0x0001 => {
+                    debug!("        Connectionless MTU");
+                    let mtu = 1024u16; //TODO: fill in the real value
+                    data.write_le(&0x0000u16); //Success
+                    data.write_le(&mtu);
+                }
+                0x0002 => {
+                    debug!("        Local supported features");
+                    // ([Vol 3] Part A, Section 4.12).
+                    let mut features: u32 = 0;
+                    features |= 1 << 3; // Enhanced Retransmission Mode
+                    features |= 1 << 5; // FCS
+                    features |= 1 << 7; // Fixed Channels supported over BR/EDR
+                    features |= 1 << 9; // Unicast Connectionless Data Reception
 
-                reply.write_front::<_, LittleEndian>(&features);
-            },
-            0x0003 => {
-                debug!("        Fixed channels supported");
-                // ([Vol 3] Part A, Section 4.13).
-                let mut channels: u64 = 0;
-                channels |= 1 << 1; // L2CAP Signaling channel
-                channels |= 1 << 2; // Connectionless reception
-                reply.write_front::<_, LittleEndian>(&channels);
+                    data.write_le(&0x0000u16); //Success
+                    data.write_le(&features);
+                },
+                0x0003 => {
+                    debug!("        Fixed channels supported");
+                    // ([Vol 3] Part A, Section 4.13).
+                    let mut channels: u64 = 0;
+                    channels |= 1 << 1; // L2CAP Signaling channel
+                    channels |= 1 << 2; // Connectionless reception
+
+                    data.write_le(&0x0000u16); //Success
+                    data.write_le(&channels);
+                }
+                _ => {
+                    error!("        Unknown information request: type={:04X}", info_type);
+                    data.write_le(&0x0001u16); //Not supported
+                }
             }
-            _ => {
-                error!("        Unknown information request: type={:04X}", info_type);
-                return Err(Error::BadPacket(instructor::Error::InvalidValue));
-            }
-        }
-        reply.write_front::<_, LittleEndian>(&0x0000u16);
-        reply.write_front::<_, LittleEndian>(&info_type);
-        Ok(reply)
+        })?;
+        Ok(())
     }
 
 }
@@ -145,16 +171,16 @@ impl State {
 // ([Vol 3] Part A, Section 4).
 #[derive(Debug, Exstruct, Instruct)]
 #[instructor(endian = "little")]
-struct SignalingHeader {
-    code: SignalingCodes,
-    id: u8,
-    length: Length<u16, 0>
+pub struct SignalingHeader {
+    pub code: SignalingCodes,
+    pub id: u8,
+    pub length: Length<u16, 0>
 }
 
 // ([Vol 3] Part A, Section 4).
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Exstruct, Instruct)]
 #[repr(u8)]
-enum SignalingCodes {
+pub enum SignalingCodes {
     CommandReject = 0x01,
     ConnectionRequest = 0x02,
     ConnectionResponse = 0x03,
@@ -197,3 +223,58 @@ impl Exstruct<LittleEndian> for Psm {
         Ok(Self(value))
     }
 }
+
+// ([Vol 3] Part A, Section 4.1).
+#[allow(dead_code)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum RejectReason {
+    CommandNotUnderstood,
+    SignalingMtuExceeded {
+        actual_mtu: u16
+    },
+    InvalidCid {
+        scid: u16,
+        dcid: u16
+    },
+}
+
+impl Instruct<LittleEndian> for RejectReason {
+    fn write_to_buffer<B: BufferMut + ?Sized>(&self, buffer: &mut B) {
+        match self {
+            RejectReason::CommandNotUnderstood => {
+                buffer.write_le(&0x0000u16);
+            },
+            RejectReason::SignalingMtuExceeded { actual_mtu } => {
+                buffer.write_le(&0x0001u16);
+                buffer.write_le(actual_mtu);
+            }
+            RejectReason::InvalidCid { scid, dcid } => {
+                buffer.write_le(&0x0002u16);
+                buffer.write_le(scid);
+                buffer.write_le(dcid);
+            }
+        }
+    }
+}
+
+
+impl Exstruct<LittleEndian> for RejectReason {
+
+    fn read_from_buffer<B: Buffer + ?Sized>(buffer: &mut B) -> Result<Self, instructor::Error> {
+        let reason: u16 = buffer.read_le()?;
+        match reason {
+            0x0000 => Ok(RejectReason::CommandNotUnderstood),
+            0x0001 => {
+                let actual_mtu: u16 = buffer.read_le()?;
+                Ok(RejectReason::SignalingMtuExceeded { actual_mtu })
+            },
+            0x0002 => {
+                let scid: u16 = buffer.read_le()?;
+                let dcid: u16 = buffer.read_le()?;
+                Ok(RejectReason::InvalidCid { scid, dcid })
+            },
+            _ => Err(instructor::Error::InvalidValue)
+        }
+    }
+}
+

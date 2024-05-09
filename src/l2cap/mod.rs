@@ -1,18 +1,22 @@
-mod signaling;
+pub mod signaling;
+pub mod channel;
 
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU8;
 use bytes::Bytes;
 use instructor::{Buffer, Exstruct, Instruct};
 use instructor::utils::Length;
 use tokio::{select, spawn};
 use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::mpsc::{UnboundedReceiver as MpscReceiver, UnboundedSender as MpscSender};
 use tracing::{debug, trace, warn};
 use crate::ensure;
 use crate::hci::acl::{AclDataAssembler, AclHeader};
 use crate::hci::consts::{EventCode, LinkType, RemoteAddr, Status};
-use crate::hci::{Error, Hci};
+use crate::hci::{AclSender, Error, Hci};
+use crate::l2cap::channel::Channel;
 
 const CID_ID_NONE: u16 = 0x0000;
 const CID_ID_SIGNALING: u16 = 0x0001;
@@ -37,12 +41,14 @@ pub fn start_l2cap_server(hci: Arc<Hci>) -> Result<(), Error> {
             tx)?;
         rx
     };
+    let sender = hci.get_acl_sender();
     spawn(async move {
         let mut state = State {
-            hci,
+            sender,
             connections: Default::default(),
             servers,
             channels: Default::default(),
+            next_signaling_id: Arc::new(Default::default()),
         };
 
         loop {
@@ -74,16 +80,23 @@ struct PhysicalConnection {
 }
 
 struct State {
-    hci: Arc<Hci>,
+    sender: AclSender,
     connections: BTreeMap<u16, PhysicalConnection>,
     servers: BTreeMap<u64, Box<dyn Server + Send>>,
-    channels: BTreeMap<u16, Channel>,
+    channels: BTreeMap<u16, (u16, MpscSender<ChannelEvent>)>,
+    next_signaling_id: Arc<AtomicU8>
 }
 
 impl State {
 
     fn get_connection(&mut self, handle: u16) -> Result<&mut PhysicalConnection, Error> {
         self.connections.get_mut(&handle).ok_or(Error::UnknownConnectionHandle(handle))
+    }
+
+    fn send_channel_msg(&self, cid: u16, msg: ChannelEvent) -> Result<(), Error> {
+        let (_, channel) = self.channels.get(&cid).ok_or(Error::UnknownChannelId(cid))?;
+        channel.send(msg).expect("Channel closed");
+        Ok(())
     }
 
     fn handle_event(&mut self, (code, mut data): (EventCode, Bytes)) -> Result<(), Error> {
@@ -157,20 +170,15 @@ impl State {
         match cid {
             CID_ID_NONE => Err(Error::BadPacket(instructor::Error::InvalidValue)),
             CID_ID_SIGNALING => self.handle_l2cap_signaling(handle, data),
-            _ => match self.channels.get(&cid) {
-                Some(channel) => {
-                    debug!("        Channel {:?}", channel);
-                    Ok(())
-                },
-                None => {
-                    warn!("Unhandled L2CAP CID: {:04X}", cid);
-                    Ok(())
-                }
+            cid if CID_RANGE_DYNAMIC.contains(&cid) => self.send_channel_msg(cid, ChannelEvent::DataReceived(data)),
+            _ => {
+                warn!("Unhandled L2CAP CID: {:04X}", cid);
+                Ok(())
             },
         }
     }
 
-    fn handle_channel_connection(&mut self, psm: u64, scid: u16) -> Result<u16, ConnectionResult> {
+    fn handle_channel_connection(&mut self, handle: u16, psm: u64, scid: u16) -> Result<u16, ConnectionResult> {
         debug!("        Connection request: PSM={:04X} SCID={:04X}", psm, scid);
         let server = self.servers.get_mut(&psm).ok_or(ConnectionResult::RefusedPsmNotSupported)?;
         //ensure!(self.servers.contains_key(&psm), ConnectionResult::RefusedPsmNotSupported);
@@ -178,14 +186,21 @@ impl State {
         //TODO check if source cid already exists for physical connection
 
         let dcid = CID_RANGE_DYNAMIC
-            .find(|&cid| !self.channels.contains_key(&cid))
+            .find(|&cid| !self.channels.contains_key(&cid) && cid != scid)
             .ok_or(ConnectionResult::RefusedNoResources)?;
 
+        let (tx, rx) = unbounded_channel();
         let channel = Channel {
+            connection_handle: handle,
             remote_cid: scid,
             local_cid: dcid,
+            receiver: rx,
+            sender: self.sender.clone(),
+            next_signaling_id: self.next_signaling_id.clone(),
+            local_mtu: 0,
+            remote_mtu: 0,
         };
-        self.channels.insert(dcid, channel);
+        self.channels.insert(dcid, (scid, tx));
         server.on_connection(channel);
 
         Ok(dcid)
@@ -196,9 +211,9 @@ impl State {
 // ([Vol 3] Part A, Section 3.1).
 #[derive(Debug, Exstruct, Instruct)]
 #[instructor(endian = "little")]
-struct L2capHeader {
-    len: Length<u16, 2>,
-    cid: u16
+pub struct L2capHeader {
+    pub len: Length<u16, 2>,
+    pub cid: u16
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Instruct)]
@@ -222,11 +237,25 @@ pub enum ConnectionStatus {
     AuthorizationPending = 0x0002,
 }
 
-#[derive(Debug, Copy, Clone)]
-struct Channel {
-    remote_cid: u16,
-    local_cid: u16
+#[allow(dead_code)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Instruct, Exstruct)]
+#[repr(u16)]
+pub enum ConfigureResult {
+    Success = 0x0000,
+    UnacceptableParameters = 0x0001,
+    Rejected = 0x0002,
+    UnknownOptions = 0x0003,
+    Pending = 0x0004,
+    FlowSpecRejected = 0x0005,
 }
+
+enum ChannelEvent {
+    DataReceived(Bytes),
+    ConfigurationRequest(u8, Bytes),
+    ConfigurationResponse(u8, ConfigureResult, Bytes),
+}
+
+
 
 trait Server {
 
@@ -238,8 +267,14 @@ struct SdpServer;
 
 impl Server for SdpServer {
 
-    fn on_connection(&mut self, _channel: Channel) {
-        debug!("SDP connection");
+    fn on_connection(&mut self, mut channel: Channel) {
+        spawn(async move {
+            if let Err(err) = channel.configure().await {
+                warn!("Error configuring channel: {:?}", err);
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(90)).await;
+        });
     }
 
 }
