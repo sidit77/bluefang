@@ -1,3 +1,5 @@
+mod data_element;
+
 use instructor::Exstruct;
 use instructor::utils::Length;
 use tokio::spawn;
@@ -33,21 +35,26 @@ struct SdpHeader {
 #[repr(u8)]
 enum PduId {
     ErrorResponse = 0x01,
-    ServiceSearchRequest = 0x02,
-    ServiceSearchResponse = 0x03,
-    ServiceAttributeRequest = 0x04,
-    ServiceAttributeResponse = 0x05,
-    ServiceSearchAttributeRequest = 0x06,
-    ServiceSearchAttributeResponse = 0x07,
+    SearchRequest = 0x02,
+    SearchResponse = 0x03,
+    AttributeRequest = 0x04,
+    AttributeResponse = 0x05,
+    SearchAttributeRequest = 0x06,
+    SearchAttributeResponse = 0x07,
 }
 
 
 
+fn handle_search_attribute_request() {
+
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
+    use bytes::{Buf, Bytes};
     use instructor::Buffer;
+    use crate::sdp::data_element::{DataElement, DataElementReader, Sequence, Uuid};
 
     #[test]
     fn parse_packet() {
@@ -58,7 +65,21 @@ mod tests {
             0x00, 0x00, 0xff, 0xff, 0x00]);
 
         let header: SdpHeader = data.read().unwrap();
-
+        println!("{:#?}", header);
+        println!("ServiceSearchPatterns:");
+        data.read_data_element::<Sequence<Uuid>>()
+            .unwrap()
+            .for_each(|attr| println!("   {}", attr.unwrap()));
+        let max_attr_len: u16 = data.read_be().unwrap();
+        println!("MaximumAttributeByteCount: {}", max_attr_len);
+        println!("AttributeIDList:");
+        data.read_data_element::<Sequence<u32>>()
+            .unwrap()
+            .for_each(|attr| println!("   {}", attr.unwrap()));
+        let cont: u8 = data.read_be().unwrap();
+        println!("cont: {:#?}", cont);
+        data.advance(cont as usize);
+        data.finish().unwrap();
     }
 
 }
