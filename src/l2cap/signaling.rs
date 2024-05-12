@@ -1,10 +1,10 @@
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use instructor::{Buffer, BufferMut, DoubleEndedBufferMut, Exstruct, Instruct, LittleEndian};
 use instructor::utils::Length;
 use tracing::{debug, error, warn};
 use crate::{ensure, log_assert};
 use crate::hci::Error;
-use crate::l2cap::{ChannelEvent, CID_ID_SIGNALING, ConfigureResult, ConnectionResult, ConnectionStatus, L2capHeader, Server, State};
+use crate::l2cap::{ChannelEvent, CID_ID_SIGNALING, ConfigureResult, ConnectionResult, ConnectionStatus, L2capHeader, State};
 
 #[derive(Debug, Copy, Clone)]
 struct SignalingContext {

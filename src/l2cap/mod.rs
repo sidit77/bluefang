@@ -10,13 +10,14 @@ use instructor::{Buffer, Exstruct, Instruct};
 use instructor::utils::Length;
 use tokio::{select, spawn};
 use tokio::sync::mpsc::unbounded_channel;
-use tokio::sync::mpsc::{UnboundedReceiver as MpscReceiver, UnboundedSender as MpscSender};
+use tokio::sync::mpsc::{UnboundedSender as MpscSender};
 use tracing::{debug, trace, warn};
 use crate::ensure;
 use crate::hci::acl::{AclDataAssembler, AclHeader};
 use crate::hci::consts::{EventCode, LinkType, RemoteAddr, Status};
 use crate::hci::{AclSender, Error, Hci};
 use crate::l2cap::channel::Channel;
+use crate::sdp::SdpServer;
 
 const CID_ID_NONE: u16 = 0x0000;
 const CID_ID_SIGNALING: u16 = 0x0001;
@@ -72,6 +73,7 @@ pub fn start_l2cap_server(hci: Arc<Hci>) -> Result<(), Error> {
     Ok(())
 }
 
+#[allow(dead_code)]
 struct PhysicalConnection {
     handle: u16,
     max_slots: u8,
@@ -186,6 +188,7 @@ impl State {
         //TODO check if source cid already exists for physical connection
 
         let dcid = CID_RANGE_DYNAMIC
+            .clone()
             .find(|&cid| !self.channels.contains_key(&cid) && cid != scid)
             .ok_or(ConnectionResult::RefusedNoResources)?;
 
@@ -249,7 +252,7 @@ pub enum ConfigureResult {
     FlowSpecRejected = 0x0005,
 }
 
-enum ChannelEvent {
+pub enum ChannelEvent {
     DataReceived(Bytes),
     ConfigurationRequest(u8, Bytes),
     ConfigurationResponse(u8, ConfigureResult, Bytes),
@@ -257,24 +260,9 @@ enum ChannelEvent {
 
 
 
-trait Server {
+pub trait Server {
 
     fn on_connection(&mut self, channel: Channel);
 
 }
 
-struct SdpServer;
-
-impl Server for SdpServer {
-
-    fn on_connection(&mut self, mut channel: Channel) {
-        spawn(async move {
-            if let Err(err) = channel.configure().await {
-                warn!("Error configuring channel: {:?}", err);
-                return;
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(90)).await;
-        });
-    }
-
-}

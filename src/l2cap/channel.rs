@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
-use bytes::{Bytes, BytesMut};
+use bytes::{BytesMut};
 use instructor::{Buffer, BufferMut, DoubleEndedBufferMut};
 use instructor::utils::Length;
 use tokio::sync::mpsc::{UnboundedReceiver as MpscReceiver};

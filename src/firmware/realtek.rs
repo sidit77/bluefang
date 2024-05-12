@@ -15,6 +15,7 @@ const RTK_ROM_LMP_8761A: u16 = 0x8761;
 const RTK_ROM_LMP_8822B: u16 = 0x8822;
 const RTK_ROM_LMP_8852A: u16 = 0x8852;
 
+#[allow(dead_code)]
 #[derive(Debug, Copy, Clone)]
 struct DriverInfo {
     rom: u16,
@@ -278,12 +279,14 @@ const EPATCH_SIGNATURE: &[u8] = b"Realtech";
 const EXTENSION_SIGNATURE: &[u8] = &[0x51, 0x04, 0xFD, 0x77];
 const EPATCH_HEADER_SIZE: usize = 14;
 
+#[allow(dead_code)]
 struct Patch {
     chip_id: u16,
     svn_version: u32,
     data: Vec<u8>,
 }
 
+#[allow(dead_code)]
 struct Firmware {
     project_id: i32,
     version: u32,
