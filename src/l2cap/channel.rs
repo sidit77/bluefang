@@ -1,12 +1,12 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
-use bytes::{BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use instructor::{Buffer, BufferMut, DoubleEndedBufferMut};
 use instructor::utils::Length;
 use tokio::sync::mpsc::{UnboundedReceiver as MpscReceiver};
 use tokio::time::sleep;
-use tracing::trace;
+use tracing::{trace, warn};
 use crate::ensure;
 use crate::hci::{AclSender, Error};
 use crate::l2cap::{ChannelEvent, CID_ID_SIGNALING, ConfigureResult, L2capHeader};
@@ -88,6 +88,27 @@ impl Channel {
         }
 
         trace!("Channel configured: local_mtu={:04X} remote_mtu={:04X}", self.local_mtu, self.remote_mtu);
+        Ok(())
+    }
+
+    pub async fn read(&mut self) -> Option<Bytes> {
+        loop {
+            match self.receiver.recv().await? {
+                ChannelEvent::DataReceived(data) => break Some(data),
+                //TODO how to handle these correctly
+                _ => warn!("Configuration event received while waiting for data")
+            }
+        }
+    }
+
+    pub fn write(&self, data: Bytes) -> Result<(), Error> {
+        let mut buffer = BytesMut::new();
+        buffer.write_le(&L2capHeader {
+            len: Length::new(data.len())?,
+            cid: self.remote_cid,
+        });
+        buffer.put(data);
+        self.sender.send(self.connection_handle, buffer.freeze())?;
         Ok(())
     }
 

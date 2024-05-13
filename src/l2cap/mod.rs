@@ -25,7 +25,7 @@ const CID_RANGE_DYNAMIC: Range<u16> = 0x0040..0xFFFF;
 
 pub fn start_l2cap_server(hci: Arc<Hci>) -> Result<(), Error> {
     let mut servers: BTreeMap<u64, Box<dyn Server + Send>> = BTreeMap::new();
-    servers.insert(0x01, Box::new(SdpServer));
+    servers.insert(0x01, Box::new(SdpServer::default()));
     let mut data = {
         let (tx, rx) = unbounded_channel();
         hci.register_data_handler(tx)?;
