@@ -1,4 +1,5 @@
 mod data_element;
+mod error;
 
 use std::collections::BTreeMap;
 use std::mem::size_of;
@@ -7,23 +8,48 @@ use bytes::{BufMut, BytesMut};
 use instructor::{Buffer, BufferMut, Exstruct, Instruct};
 use instructor::utils::Length;
 use tokio::spawn;
-use tracing::{trace, warn};
-use crate::ensure;
-use crate::hci::Error;
+use tracing::{error, trace, warn};
+use crate::{ensure, hci};
 use crate::l2cap::channel::Channel;
 use crate::l2cap::Server;
 use crate::sdp::data_element::{DataElement, Uuid};
+use crate::sdp::error::Error;
+
+#[derive(Default, Clone)]
+pub struct SdpServerBuilder {
+    records: BTreeMap<Uuid, BTreeMap<u16, DataElement>>
+}
+
+impl SdpServerBuilder {
+    pub fn add_records(mut self, service: impl Into<Uuid>, records: impl IntoIterator<Item=(u16, DataElement)>) -> Self {
+        self
+            .records
+            .entry(service.into())
+            .or_default()
+            .extend(records.into_iter().map(|(id, value)| (id, value.into())));
+        self
+    }
+
+    pub fn build(self) -> SdpServer {
+        SdpServer {
+            records: Arc::new(self.records)
+        }
+    }
+}
+
 
 #[derive(Clone)]
 pub struct SdpServer {
     records: Arc<BTreeMap<Uuid, BTreeMap<u16, DataElement>>>
 }
 
+const PNP_INFORMATION: Uuid = Uuid::from_u16(0x1200);
+
 impl Default for SdpServer {
     fn default() -> Self {
-        Self {
-            records: Arc::new(BTreeMap::new())
-        }
+        SdpServerBuilder::default()
+            .add_records(PNP_INFORMATION, [])
+            .build()
     }
 }
 
@@ -45,15 +71,21 @@ impl Server for SdpServer {
 
 }
 
+fn catch_error<F, E, R>(f: F) -> Result<R, E>
+    where F: FnOnce() -> Result<R, E>
+{
+    f()
+}
+
 const CONTINUATION_STATE: [u8; 4] = *b"cont";
 impl SdpServer {
 
-    async fn handle_connection(self, mut channel: Channel) -> Result<(), Error> {
+    async fn handle_connection(self, mut channel: Channel) -> Result<(), hci::Error> {
         let mut buffer = BytesMut::new();
         while let Some(mut request) = channel.read().await {
             //TODO handle errors more gracefully
             let SdpHeader {pdu, transaction_id, ..} = request.read()?;
-            let reply = match pdu {
+            let reply = catch_error(|| match pdu {
                 // ([Vol 3] Part B, Section 4.7.1).
                 PduId::SearchAttributeRequest => {
                     let service_search_patterns: DataElement = request.read()?;
@@ -66,10 +98,10 @@ impl SdpServer {
                             buffer.write(&self.collect_records(service_search_patterns, attributes)?);
                         },
                         4 => {
-                            ensure!(request.read_be::<[u8; 4]>()? == CONTINUATION_STATE, Error::BadPacket(instructor::Error::InvalidValue));
-                            ensure!(!buffer.is_empty(), Error::BadPacket(instructor::Error::InvalidValue));
+                            ensure!(request.read_be::<[u8; 4]>()? == CONTINUATION_STATE, Error::InvalidContinuationState);
+                            ensure!(!buffer.is_empty(), Error::InvalidContinuationState);
                         },
-                        _ => return Err(Error::BadPacket(instructor::Error::InvalidValue))
+                        _ => return Err(Error::InvalidContinuationState)
                     }
                     request.finish()?;
                     let to_send = buffer.split_to(max_attr_len.min(buffer.len()));
@@ -95,13 +127,16 @@ impl SdpServer {
                             packet.write_be(&CONTINUATION_STATE);
                         }
                     }
-                    Some(packet.freeze())
+                    Ok(packet.freeze())
                 }
                 _ => {
                     warn!("Unsupported PDU: {:?}", pdu);
-                    None
+                    Err(Error::InvalidRequest)
                 }
-            };
+            }).map(Some).unwrap_or_else(|err| {
+                error!("Error handling request: {:?}", err);
+                None
+            });
             if let Some(reply) = reply {
                 channel.write(reply)?;
             }
@@ -120,7 +155,7 @@ impl SdpServer {
                     let end = (*range & 0xFFFF) as u16;
                     Ok(start..=end)
                 }
-                _ => Err(Error::BadPacket(instructor::Error::InvalidValue))
+                _ => Err(Error::UnexpectedDataType)
             })
             .collect::<Result<Vec<_>, _>>()?;
         let records = service_search_patterns
@@ -131,7 +166,7 @@ impl SdpServer {
                 let records = self
                     .records
                     .get(&uuid)
-                    .ok_or(Error::BadPacket(instructor::Error::InvalidValue))?;
+                    .ok_or(Error::UnknownServiceRecordHandle(uuid))?;
                 let attributes = attributes
                     .iter()
                     .flat_map(|range| records.range(range.clone()))
@@ -195,7 +230,11 @@ mod tests {
         data.advance(cont as usize);
         data.finish().unwrap();
         let sdp = SdpServer::default();
-        println!("{:#?}", sdp.collect_records(service_search_patterns, attributes));
+        let records = sdp.collect_records(service_search_patterns, attributes).unwrap();
+        println!("{:#?}", records);
+        let mut buffer = BytesMut::new();
+        buffer.write(&records);
+        println!("{:x?}", buffer.chunk());
     }
 
 }

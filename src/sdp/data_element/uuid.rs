@@ -6,23 +6,35 @@ pub struct Uuid(u128);
 
 impl Uuid {
     const BASE: u128 = 0x00000000_0000_1000_8000_00805F9B34FB;
+
+    pub const fn from_u16(value: u16) -> Self {
+        Self(((value as u128) << 96) + Self::BASE)
+    }
+
+    pub const fn from_u32(value: u32) -> Self {
+        Self(((value as u128) << 96) + Self::BASE)
+    }
+
+    pub const fn from_u128(value: u128) -> Self {
+        Self(value)
+    }
 }
 
 impl From<u16> for Uuid {
     fn from(value: u16) -> Self {
-        Self(((value as u128) << 96) + Self::BASE)
+        Self::from_u16(value)
     }
 }
 
 impl From<u32> for Uuid {
     fn from(value: u32) -> Self {
-        Self(((value as u128) << 96) + Self::BASE)
+        Self::from_u32(value)
     }
 }
 
 impl From<u128> for Uuid {
     fn from(value: u128) -> Self {
-        Self(value)
+        Self::from_u128(value)
     }
 }
 

@@ -1,10 +1,11 @@
 mod uuid;
 
-use instructor::{BigEndian, Buffer, BufferMut, Error, Exstruct, Instruct};
+use instructor::{BigEndian, Buffer, BufferMut, Error as InstructorError, Exstruct, Instruct};
 use instructor::utils::Limit;
 use crate::ensure;
 
 pub use uuid::Uuid;
+use crate::sdp::error::Error;
 
 // ([Vol 3] Part B, Section 3.2).
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Exstruct)]
@@ -58,9 +59,9 @@ struct FullDataElementHeader {
 
 // ([Vol 3] Part B, Section 3.3).
 impl Exstruct<BigEndian> for FullDataElementHeader {
-    fn read_from_buffer<B: Buffer>(buffer: &mut B) -> Result<Self, Error> {
+    fn read_from_buffer<B: Buffer>(buffer: &mut B) -> Result<Self, InstructorError> {
         let DataElementHeader{ data_type, size_index } = buffer.read()?;
-        ensure!(data_type.valid_size_indices().contains(&size_index), Error::InvalidValue);
+        ensure!(data_type.valid_size_indices().contains(&size_index), InstructorError::InvalidValue);
         let length = match size_index {
             0 if data_type == DataType::Nil => 0,
             0 => 1,
@@ -71,9 +72,9 @@ impl Exstruct<BigEndian> for FullDataElementHeader {
             5 => buffer.read_be::<u8>()? as usize,
             6 => buffer.read_be::<u16>()? as usize,
             7 => buffer.read_be::<u32>()? as usize,
-            _ => return Err(Error::InvalidValue)
+            _ => return Err(InstructorError::InvalidValue)
         };
-        ensure!(length <= buffer.remaining(), Error::TooShort);
+        ensure!(length <= buffer.remaining(), InstructorError::TooShort);
         Ok(Self {
             data_type,
             length,
@@ -106,35 +107,35 @@ impl DataElement {
     pub fn as_sequence(&self) -> Result<&[DataElement], Error> {
         match self {
             DataElement::Sequence(sequence) => Ok(sequence),
-            _ => Err(Error::InvalidValue)
+            _ => Err(Error::UnexpectedDataType)
         }
     }
 
     pub fn as_uuid(&self) -> Result<Uuid, Error> {
         match self {
             DataElement::Uuid(uuid) => Ok(*uuid),
-            _ => Err(Error::InvalidValue)
+            _ => Err(Error::UnexpectedDataType)
         }
     }
 
     pub fn as_u32(&self) -> Result<u32, Error> {
         match self {
             DataElement::U32(value) => Ok(*value),
-            _ => Err(Error::InvalidValue)
+            _ => Err(Error::UnexpectedDataType)
         }
     }
 
     pub fn as_u16(&self) -> Result<u16, Error> {
         match self {
             DataElement::U16(value) => Ok(*value),
-            _ => Err(Error::InvalidValue)
+            _ => Err(Error::UnexpectedDataType)
         }
     }
 
 }
 
 impl Exstruct<BigEndian> for DataElement {
-    fn read_from_buffer<B: Buffer>(buffer: &mut B) -> Result<Self, Error> {
+    fn read_from_buffer<B: Buffer>(buffer: &mut B) -> Result<Self, InstructorError> {
         let FullDataElementHeader { data_type, length } = buffer.read()?;
 
         match (data_type, length) {
@@ -155,7 +156,7 @@ impl Exstruct<BigEndian> for DataElement {
             (DataType::Text, n) => {
                 let mut text = vec![0u8; n];
                 buffer.try_copy_to_slice(&mut text)?;
-                Ok(Self::Text(String::from_utf8(text).map_err(|_| Error::InvalidValue)?))
+                Ok(Self::Text(String::from_utf8(text).map_err(|_| InstructorError::InvalidValue)?))
             },
             (DataType::Bool, 1) => Ok(Self::Bool(buffer.read_be::<u8>()? != 0)),
             (DataType::Sequence, n) => {
@@ -176,7 +177,7 @@ impl Exstruct<BigEndian> for DataElement {
                 buffer.finish()?;
                 Ok(Self::Alternative(alternative))
             },
-            _ => Err(Error::InvalidValue)
+            _ => Err(InstructorError::InvalidValue)
         }
     }
 }
