@@ -170,7 +170,7 @@ impl SdpServer {
                 let attributes = attributes
                     .iter()
                     .flat_map(|range| records.range(range.clone()))
-                    .map(|(_, value)| value.clone())
+                    .flat_map(|(key, value)| [DataElement::U16(*key), value.clone()])
                     .collect::<Vec<_>>();
                 Ok::<_, Error>(DataElement::Sequence(attributes))
             })
