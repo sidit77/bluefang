@@ -1,19 +1,17 @@
 use std::sync::Arc;
+
 use anyhow::Context;
-use bytes::BytesMut;
-use instructor::{BufferMut, DoubleEndedBufferMut};
-use instructor::utils::Length;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use redtooth::firmware::RealTekFirmwareLoader;
-use redtooth::hci::connection::handle_connection;
-use redtooth::hci::consts::{ClassOfDevice, MajorDeviceClass, MajorServiceClasses};
-use redtooth::hci::Hci;
-use redtooth::host::usb::UsbController;
-use redtooth::l2cap::signaling::{SignalingCodes, SignalingHeader};
-use redtooth::l2cap::{L2capHeader, start_l2cap_server};
+
+use bluefang::firmware::RealTekFirmwareLoader;
+use bluefang::hci::connection::handle_connection;
+use bluefang::hci::consts::{ClassOfDevice, MajorDeviceClass, MajorServiceClasses};
+use bluefang::hci::Hci;
+use bluefang::host::usb::UsbController;
+use bluefang::l2cap::start_l2cap_server;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
