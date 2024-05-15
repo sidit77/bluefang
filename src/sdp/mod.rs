@@ -1,5 +1,6 @@
 mod data_element;
 mod error;
+mod service;
 
 use std::collections::BTreeMap;
 use std::mem::size_of;
@@ -12,9 +13,12 @@ use tracing::{error, trace, warn};
 use crate::{ensure, hci};
 use crate::l2cap::channel::Channel;
 use crate::l2cap::Server;
-use crate::sdp::data_element::{DataElement, Uuid};
 use crate::sdp::error::Error;
+use crate::sdp::service::{Service, ServiceAttribute};
 
+pub use data_element::{DataElement, Uuid};
+
+/*
 #[derive(Default, Clone)]
 pub struct SdpServerBuilder {
     records: BTreeMap<Uuid, BTreeMap<u16, DataElement>>
@@ -36,20 +40,57 @@ impl SdpServerBuilder {
         }
     }
 }
+*/
+
 
 
 #[derive(Clone)]
 pub struct SdpServer {
-    records: Arc<BTreeMap<Uuid, BTreeMap<u16, DataElement>>>
+    records: Arc<BTreeMap<u32, Service>>
 }
 
-const PNP_INFORMATION: Uuid = Uuid::from_u16(0x1200);
+const SDP_SERVICE_RECORD_HANDLE_ATTRIBUTE_ID: u16 = 0x0000;
+const SDP_SERVICE_CLASS_ID_LIST_ATTRIBUTE_ID: u16 = 0x0001;
+const SDP_PROTOCOL_DESCRIPTOR_LIST_ATTRIBUTE_ID: u16 = 0x0004;
+const SDP_BROWSE_GROUP_LIST_ATTRIBUTE_ID: u16 = 0x0005;
+const SDP_BLUETOOTH_PROFILE_DESCRIPTOR_LIST_ATTRIBUTE_ID: u16 = 0x0009;
+
+
+const SDP_PUBLIC_BROWSE_ROOT: Uuid = Uuid::from_u16(0x1002);
+const BT_AUDIO_SINK_SERVICE: Uuid = Uuid::from_u16(0x110b);
+const BT_L2CAP_PROTOCOL_ID: Uuid = Uuid::from_u16(0x0100);
+const BT_AVDTP_PROTOCOL_ID: Uuid = Uuid::from_u16(0x0019);
+const BT_ADVANCED_AUDIO_DISTRIBUTION_SERVICE: Uuid = Uuid::from_u16(0x110d);
+
+const AVDTP_PSM: u16 = 0x0019;
 
 impl Default for SdpServer {
     fn default() -> Self {
-        SdpServerBuilder::default()
-            .add_records(PNP_INFORMATION, [])
-            .build()
+        //SdpServerBuilder::default()
+        //    .add_records(PNP_INFORMATION, [])
+        //    .build()
+        let service_record_handle = 0x00010001;
+        let version = 1u16 << 8 | 3u16;
+        SdpServer {
+            records: Arc::new(BTreeMap::from_iter([
+                (service_record_handle, Service::from_iter([
+                    ServiceAttribute::new(SDP_SERVICE_RECORD_HANDLE_ATTRIBUTE_ID, service_record_handle),
+                    ServiceAttribute::new(SDP_BROWSE_GROUP_LIST_ATTRIBUTE_ID, DataElement::from_iter([
+                        SDP_PUBLIC_BROWSE_ROOT,
+                    ])),
+                    ServiceAttribute::new(SDP_SERVICE_CLASS_ID_LIST_ATTRIBUTE_ID, DataElement::from_iter([
+                        BT_AUDIO_SINK_SERVICE,
+                    ])),
+                    ServiceAttribute::new(SDP_PROTOCOL_DESCRIPTOR_LIST_ATTRIBUTE_ID, DataElement::from_iter([
+                        (BT_L2CAP_PROTOCOL_ID, AVDTP_PSM),
+                        (BT_AVDTP_PROTOCOL_ID, version)
+                    ])),
+                    ServiceAttribute::new(SDP_BLUETOOTH_PROFILE_DESCRIPTOR_LIST_ATTRIBUTE_ID, DataElement::from_iter([
+                        (BT_ADVANCED_AUDIO_DISTRIBUTION_SERVICE, version)
+                    ])),
+                ]))
+            ])),
+        }
     }
 }
 
@@ -144,6 +185,15 @@ impl SdpServer {
         Ok(())
     }
 
+    fn collecting_matching_records<'a: 'b, 'b>(&'a self, service_search_patterns: &'b [Uuid]) -> impl Iterator<Item=&'a Service> + 'b {
+        self
+            .records
+            .values()
+            .filter(move |&service| service_search_patterns
+                .iter()
+                .any(|&uuid| service.contains(uuid)))
+    }
+
     fn collect_records(&self, service_search_patterns: DataElement, attribute_list: DataElement) -> Result<DataElement, Error> {
         let attributes = attribute_list
             .as_sequence()?
@@ -158,24 +208,24 @@ impl SdpServer {
                 _ => Err(Error::UnexpectedDataType)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let records = service_search_patterns
+
+        let service_search_patterns = service_search_patterns
             .as_sequence()?
             .iter()
-            .map(|pattern| {
-                let uuid = pattern.as_uuid()?;
-                let records = self
-                    .records
-                    .get(&uuid)
-                    .ok_or(Error::UnknownServiceRecordHandle(uuid))?;
-                let attributes = attributes
-                    .iter()
-                    .flat_map(|range| records.range(range.clone()))
-                    .flat_map(|(key, value)| [DataElement::U16(*key), value.clone()])
-                    .collect::<Vec<_>>();
-                Ok::<_, Error>(DataElement::Sequence(attributes))
-            })
+            .map(|element| element.as_uuid())
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(DataElement::Sequence(records))
+
+        let attribute_list = self
+            .collecting_matching_records(&service_search_patterns)
+            .map(|service| service
+                .attributes(&attributes)
+                .cloned()
+                .flat_map(ServiceAttribute::into_iter)
+                .collect::<DataElement>())
+            .filter(|element| !element.is_empty())
+            .collect::<DataElement>();
+
+        Ok(attribute_list)
     }
 
 }
@@ -211,30 +261,43 @@ mod tests {
     use super::*;
     use bytes::{Buf, Bytes};
     use instructor::Buffer;
-    use crate::sdp::data_element::{DataElement, Uuid};
+    use crate::sdp::data_element::{DataElement};
 
     #[test]
     fn parse_packet() {
+        //let mut data = Bytes::from_static(&[
+        //    0x06, 0x00, 0x00, 0x00, 0x0f,
+        //    0x35, 0x03, 0x19, 0x12, 0x00,
+        //    0x03, 0xf0, 0x35, 0x05, 0x0a,
+        //    0x00, 0x00, 0xff, 0xff, 0x00]);
+
         let mut data = Bytes::from_static(&[
             0x06, 0x00, 0x00, 0x00, 0x0f,
-            0x35, 0x03, 0x19, 0x12, 0x00,
+            0x35, 0x03, 0x19, 0x01, 0x00,
             0x03, 0xf0, 0x35, 0x05, 0x0a,
             0x00, 0x00, 0xff, 0xff, 0x00]);
 
         let header: SdpHeader = data.read().unwrap();
         println!("{:#?}", header);
         let service_search_patterns: DataElement = data.read().unwrap();
-        let max_attr_len: u16 = data.read_be().unwrap();
+        let _max_attr_len: u16 = data.read_be().unwrap();
         let attributes: DataElement = data.read().unwrap();
         let cont: u8 = data.read_be().unwrap();
         data.advance(cont as usize);
         data.finish().unwrap();
         let sdp = SdpServer::default();
         let records = sdp.collect_records(service_search_patterns, attributes).unwrap();
-        println!("{:#?}", records);
+        println!("{:?}", records);
         let mut buffer = BytesMut::new();
         buffer.write(&records);
         println!("{:x?}", buffer.chunk());
+        let expected = &[
+            0x35, 0x3c, 0x35, 0x3a, 0x09, 0x00, 0x00, 0x0a, 0x00, 0x01, 0x00, 0x01, 0x09, 0x00, 0x01, 0x35,
+            0x03, 0x19, 0x11, 0x0b, 0x09, 0x00, 0x04, 0x35, 0x10, 0x35, 0x06, 0x19, 0x01, 0x00, 0x09, 0x00,
+            0x19, 0x35, 0x06, 0x19, 0x00, 0x19, 0x09, 0x01, 0x03, 0x09, 0x00, 0x05, 0x35, 0x03, 0x19, 0x10,
+            0x02, 0x09, 0x00, 0x09, 0x35, 0x08, 0x35, 0x06, 0x19, 0x11, 0x0d, 0x09, 0x01, 0x03
+        ];
+        assert_eq!(buffer.chunk(), expected);
     }
 
 }

@@ -105,6 +105,17 @@ pub enum DataElement {
 
 impl DataElement {
 
+    pub fn is_empty(&self) -> bool {
+        match self {
+            // DataElement::Nil => true,
+            DataElement::Text(text) => text.is_empty(),
+            DataElement::Sequence(sequence) => sequence.is_empty(),
+            DataElement::Alternative(alternative) => alternative.is_empty(),
+            DataElement::Url(url) => url.is_empty(),
+            _ => false
+        }
+    }
+
     pub fn as_sequence(&self) -> Result<&[DataElement], Error> {
         match self {
             DataElement::Sequence(sequence) => Ok(sequence),
@@ -167,6 +178,108 @@ impl DataElement {
         }
     }
 
+}
+
+impl From<u8> for DataElement {
+    fn from(value: u8) -> Self {
+        DataElement::U8(value)
+    }
+}
+
+impl From<u16> for DataElement {
+    fn from(value: u16) -> Self {
+        DataElement::U16(value)
+    }
+}
+
+impl From<u32> for DataElement {
+    fn from(value: u32) -> Self {
+        DataElement::U32(value)
+    }
+}
+
+impl From<u64> for DataElement {
+    fn from(value: u64) -> Self {
+        DataElement::U64(value)
+    }
+}
+
+impl From<u128> for DataElement {
+    fn from(value: u128) -> Self {
+        DataElement::U128(value)
+    }
+}
+
+impl From<i8> for DataElement {
+    fn from(value: i8) -> Self {
+        DataElement::I8(value)
+    }
+}
+
+impl From<i16> for DataElement {
+    fn from(value: i16) -> Self {
+        DataElement::I16(value)
+    }
+}
+
+impl From<i32> for DataElement {
+    fn from(value: i32) -> Self {
+        DataElement::I32(value)
+    }
+}
+
+impl From<i64> for DataElement {
+    fn from(value: i64) -> Self {
+        DataElement::I64(value)
+    }
+}
+
+impl From<i128> for DataElement {
+    fn from(value: i128) -> Self {
+        DataElement::I128(value)
+    }
+}
+
+impl From<Uuid> for DataElement {
+    fn from(value: Uuid) -> Self {
+        DataElement::Uuid(value)
+    }
+}
+
+impl From<String> for DataElement {
+    fn from(value: String) -> Self {
+        DataElement::Text(value)
+    }
+}
+
+impl From<&str> for DataElement {
+    fn from(value: &str) -> Self {
+        DataElement::Text(value.to_string())
+    }
+}
+
+impl From<bool> for DataElement {
+    fn from(value: bool) -> Self {
+        DataElement::Bool(value)
+    }
+}
+
+impl From<Vec<DataElement>> for DataElement {
+    fn from(value: Vec<DataElement>) -> Self {
+        DataElement::Sequence(value)
+    }
+}
+
+impl<D1: Into<DataElement>, D2: Into<DataElement>> From<(D1, D2)> for DataElement {
+    fn from((d1, d2): (D1, D2)) -> Self {
+        DataElement::from_iter([d1.into(), d2.into()])
+    }
+}
+
+impl<D: Into<DataElement>> FromIterator<D> for DataElement {
+    fn from_iter<T: IntoIterator<Item=D>>(iter: T) -> Self {
+        DataElement::Sequence(iter.into_iter().map(D::into).collect())
+    }
 }
 
 impl Exstruct<BigEndian> for DataElement {

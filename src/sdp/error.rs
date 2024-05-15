@@ -1,12 +1,11 @@
 use instructor::{Exstruct, Instruct};
-use crate::sdp::data_element::Uuid;
 
 #[derive(Debug)]
 pub enum Error {
     InvalidContinuationState,
     InvalidRequest,
     UnexpectedDataType,
-    UnknownServiceRecordHandle(Uuid),
+    // UnknownServiceRecordHandle(Uuid),
     MalformedPacketContent,
     UnexpectedPacketLength
 }

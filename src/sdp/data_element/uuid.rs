@@ -24,11 +24,6 @@ impl Uuid {
     }
 
     #[inline]
-    pub const fn as_u128(self) -> u128 {
-        self.0
-    }
-
-    #[inline]
     fn remove_base(self) -> Option<u32> {
         ((self.0 & ((1u128 << 96) - 1)) == Self::BASE)
             .then_some((self.0 >> 96) as u32)
