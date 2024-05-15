@@ -5,9 +5,22 @@ pub enum Error {
     InvalidContinuationState,
     InvalidRequest,
     UnexpectedDataType,
-    // UnknownServiceRecordHandle(Uuid),
+    UnknownServiceRecordHandle(u32),
     MalformedPacketContent,
     UnexpectedPacketLength
+}
+
+impl From<Error> for SdpErrorCodes {
+    fn from(value: Error) -> Self {
+        match value {
+            Error::InvalidContinuationState => Self::InvalidContinuationState,
+            Error::InvalidRequest => Self::InvalidSdpVersion,
+            Error::UnexpectedDataType => Self::InvalidRequestSyntax,
+            Error::MalformedPacketContent => Self::InvalidSdpVersion,
+            Error::UnexpectedPacketLength => Self::InvalidPduSize,
+            Error::UnknownServiceRecordHandle(_) => Self::InvalidServiceRecordHandle
+        }
+    }
 }
 
 impl From<instructor::Error> for Error {
