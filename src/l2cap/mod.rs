@@ -12,6 +12,7 @@ use tokio::{select, spawn};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::mpsc::{UnboundedSender as MpscSender};
 use tracing::{debug, trace, warn};
+use crate::avdtp::AvdtpServer;
 use crate::ensure;
 use crate::hci::acl::{AclDataAssembler, AclHeader};
 use crate::hci::consts::{EventCode, LinkType, RemoteAddr, Status};
@@ -26,6 +27,7 @@ const CID_RANGE_DYNAMIC: Range<u16> = 0x0040..0xFFFF;
 pub fn start_l2cap_server(hci: Arc<Hci>) -> Result<(), Error> {
     let mut servers: BTreeMap<u64, Box<dyn Server + Send>> = BTreeMap::new();
     servers.insert(0x01, Box::new(SdpServer::default()));
+    servers.insert(0x019, Box::new(AvdtpServer::default()));
     let mut data = {
         let (tx, rx) = unbounded_channel();
         hci.register_data_handler(tx)?;
