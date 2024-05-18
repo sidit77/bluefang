@@ -7,17 +7,31 @@ use crate::l2cap::channel::Channel;
 // ([AVDTP] Section 8.6.2).
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Exstruct, Instruct)]
 #[instructor(endian = "big")]
-struct StreamEndpoint {
+pub struct StreamEndpoint {
     #[instructor(bitfield(u8))]
     #[instructor(bits(2..8))]
-    seid: u8,
+    pub seid: u8,
     #[instructor(bits(1..2))]
-    in_use: bool,
+    pub in_use: bool,
     #[instructor(bitfield(u8))]
     #[instructor(bits(4..8))]
-    media_type: MediaType,
+    pub media_type: MediaType,
     #[instructor(bits(3..4))]
-    tsep: StreamEndpointType,
+    pub tsep: StreamEndpointType,
+}
+
+// [AVDTP] Section 8.21.1.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Exstruct, Instruct)]
+#[repr(u8)]
+pub enum ServiceCategory {
+    MediaTransport = 0x01,
+    Reporting = 0x02,
+    Recovery = 0x03,
+    ContentProtection = 0x04,
+    HeaderCompression = 0x05,
+    Multiplexing = 0x06,
+    MediaCodec = 0x07,
+    DelayReporting = 0x08,
 }
 
 // ([Assigned Numbers] Section 6.3.1).
@@ -27,6 +41,29 @@ pub enum MediaType {
     Audio = 0x00,
     Video = 0x01,
     Multimedia = 0x02,
+}
+
+// ([Assigned Numbers] Section 6.5.1).
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Exstruct, Instruct)]
+#[repr(u8)]
+pub enum AudioCodec {
+    Sbc = 0x00,
+    Mpeg12Audio = 0x01,
+    Mpeg24Acc = 0x02,
+    MpegdUsac = 0x03,
+    Atrac = 0x04,
+    VendorSpecific = 0xFF,
+}
+
+// ([Assigned Numbers] Section 6.6.1).
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Exstruct, Instruct)]
+#[repr(u8)]
+pub enum VideoCodec {
+    H263Baseline = 0x00,
+    Mpeg4Visual = 0x01,
+    H263Profile3 = 0x02,
+    H263Profile8 = 0x03,
+    VendorSpecific = 0xFF,
 }
 
 // ([Assigned Numbers] Section 6.3.1).
@@ -62,9 +99,9 @@ pub enum MessageType {
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Exstruct, Instruct)]
 #[repr(u8)]
 pub enum SignalIdentifier {
-    //#[instructor(default)]
-    //Unknown = 0x00,
     #[default]
+    #[instructor(default)]
+    Unknown = 0x00,
     Discover = 0x01,
     GetCapabilities = 0x02,
     SetConfiguration = 0x03,
@@ -234,28 +271,42 @@ impl SignalChannelExt for Channel {
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-    use instructor::Buffer;
-    use crate::avdtp::packets::{MediaType, SignalMessageAssembler, StreamEndpoint, StreamEndpointType};
+    use bytes::{Buf, Bytes, BytesMut};
+    use instructor::{Buffer, BufferMut};
+    use crate::avdtp::packets::{MediaType, ServiceCategory, SignalMessageAssembler, StreamEndpoint, StreamEndpointType};
 
     #[test]
     fn test_packets() {
         //let mut data = Bytes::from_static(&[0x00, 0x01]);
-        let mut data = Bytes::from_static(&[0x12, 0x0c, 0x01, 0x00, 0x07, 0x06, 0x00, 0x00, 0xff, 0xff, 0x02, 0x35]);
+        let data = Bytes::from_static(&[0x12, 0x0c, 0x01, 0x00, 0x07, 0x06, 0x00, 0x00, 0xff, 0xff, 0x02, 0x35]);
         let mut assember = SignalMessageAssembler::default();
-        println!("{:?}", assember.process_msg(data).unwrap());
+        let msg = assember.process_msg(data).unwrap().unwrap();
+        println!("{:?}", msg);
+        {
+            let mut data = msg.data;
+            while !data.is_empty() {
+                let service: ServiceCategory = data.read_be().unwrap();
+                println!("{:?}", service);
+                let length: u8 = data.read_be().unwrap();
+                data.advance(length as usize);
+            }
+        }
     }
 
     #[test]
     fn test_endpoint_struct() {
         let data: &[u8] = &[0x04, 0x08];
-        let ep: StreamEndpoint = data.clone().read().unwrap();
+        let ep: StreamEndpoint = (&*data).read().unwrap();
         assert_eq!(ep, StreamEndpoint {
             seid: 0x01,
             in_use: false,
             media_type: MediaType::Audio,
             tsep: StreamEndpointType::Sink
         });
+
+        let mut buffer = BytesMut::new();
+        buffer.write(&ep);
+        assert_eq!(buffer.chunk(), data);
     }
 
 }

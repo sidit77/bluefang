@@ -1,10 +1,12 @@
 mod iter;
 mod bytes;
+mod mutex_cell;
 
 use std::fmt::{Debug, Formatter};
 use tokio::sync::mpsc::UnboundedSender;
 pub use iter::IteratorExt;
 pub use bytes::SliceExt;
+pub use mutex_cell::MutexCell;
 
 #[macro_export]
 macro_rules! ensure {
