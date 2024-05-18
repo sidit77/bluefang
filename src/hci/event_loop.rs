@@ -14,8 +14,8 @@ use crate::hci::consts::{EventCode, Status};
 use crate::host::usb::UsbHost;
 use crate::utils::{DispatchExt};
 
-const MAX_HCI_EVENT_SIZE: usize = 1 + size_of::<u8>() + u8::MAX as usize;
-const HCI_EVENT_QUEUE_SIZE: usize = 4;
+const TRANSFER_BUFFER_SIZE: usize = 4096;
+const TRANSFER_BUFFER_COUNT: usize = 4;
 
 pub enum EventLoopCommand {
     Shutdown,
@@ -35,19 +35,20 @@ pub async fn event_loop(
     mut acl_receiver: MpscReceiver<Bytes>,
     mut ctl_receiver: MpscReceiver<EventLoopCommand>,
 ) {
+
     let mut events = transport.interface.interrupt_in_queue(transport.endpoints.event);
-    for _ in 0..HCI_EVENT_QUEUE_SIZE {
-        events.submit(RequestBuffer::new(MAX_HCI_EVENT_SIZE));
+    for _ in 0..TRANSFER_BUFFER_COUNT {
+        events.submit(RequestBuffer::new(TRANSFER_BUFFER_SIZE));
     }
 
     let mut acl_in = transport.interface.bulk_in_queue(transport.endpoints.acl_in);
-    for _ in 0..4 {
-        acl_in.submit(RequestBuffer::new(2048)); //TODO Check this
+    for _ in 0..TRANSFER_BUFFER_COUNT {
+        acl_in.submit(RequestBuffer::new(TRANSFER_BUFFER_SIZE));
     }
     let mut acl_out = transport.interface.bulk_out_queue(transport.endpoints.acl_out);
 
     let mut state = State::default();
-    let log = LogWriter::new("btsnoop.log");
+    let log = LogWriter::new("btlog.snoop");
     let mut buffer = BytesMut::with_capacity(4096);
 
     loop {
@@ -66,7 +67,7 @@ pub async fn event_loop(
                     },
                     Err(err) => error!("Error reading HCI event: {:?}", err),
                 }
-                events.submit(RequestBuffer::reuse(event.data, MAX_HCI_EVENT_SIZE));
+                events.submit(RequestBuffer::reuse(event.data, TRANSFER_BUFFER_SIZE));
             },
             data = acl_in.next_complete() => {
                 match data.status {
@@ -79,7 +80,7 @@ pub async fn event_loop(
                     },
                     Err(err) => error!("Error reading HCI event: {:?}", err),
                 }
-                acl_in.submit(RequestBuffer::reuse(data.data, MAX_HCI_EVENT_SIZE));
+                acl_in.submit(RequestBuffer::reuse(data.data, TRANSFER_BUFFER_SIZE));
             },
             completion = acl_out.next_complete(), if acl_out.pending() > 0 => {
                 completion
