@@ -138,10 +138,10 @@ impl State {
                     debug!("        Local supported features");
                     // ([Vol 3] Part A, Section 4.12).
                     let mut features: u32 = 0;
-                    features |= 1 << 3; // Enhanced Retransmission Mode
-                    features |= 1 << 5; // FCS
+                    //features |= 1 << 3; // Enhanced Retransmission Mode
+                    //features |= 1 << 5; // FCS
                     features |= 1 << 7; // Fixed Channels supported over BR/EDR
-                    features |= 1 << 9; // Unicast Connectionless Data Reception
+                    //features |= 1 << 9; // Unicast Connectionless Data Reception
 
                     data.write_le(&0x0000u16); //Success
                     data.write_le(&features);

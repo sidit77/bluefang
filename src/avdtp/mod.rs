@@ -101,9 +101,7 @@ impl AvdtpSession {
             match assembler.process_msg(packet) {
                 Ok(Some(header)) => {
                     let reply = self.handle_signal_message(header);
-                    trace!("Sending signaling reply: {:?}", reply);
                     channel.send_signal(reply)?;
-                    trace!("Signaling reply sent");
                 }
                 Ok(None) => continue,
                 Err(err) => {
@@ -163,13 +161,12 @@ impl AvdtpSession {
                 //TODO add the required parameters to a reject
                 let acp_seid = data.read_be::<u8>()? >> 2;
                 let int_seid = data.read_be::<u8>()? >> 2;
-                while dbg!(!data.is_empty()) {
+                while !data.is_empty() {
                     let service: ServiceCategory = data.read_be()?;
                     info!("SET CONFIG (0x{:02x} -> 0x{:02x}): {:?}", int_seid, acp_seid, service);
                     let length: u8 = data.read_be()?;
                     data.advance(length as usize);
                 }
-                trace!("Exiting set config");
                 Ok(())
             }),
             // ([AVDTP] Section 8.10).

@@ -1,6 +1,10 @@
+use std::cmp::Ordering;
+use std::iter::repeat;
+
 use bytes::{Bytes, BytesMut};
 use instructor::{Buffer, BufferMut, Error, Exstruct, Instruct};
 use tracing::warn;
+
 use crate::{ensure, hci};
 use crate::l2cap::channel::Channel;
 
@@ -245,25 +249,26 @@ impl SignalChannelExt for Channel {
             true => (PacketType::Single, usize::MAX),
             false => (PacketType::Start, (self.remote_mtu - 2) as usize)
         };
-        let number_of_signaling_packets = data.len().div_ceil(chunk_size);
-        for (i, chunk) in data.chunks(chunk_size).enumerate() {
+        let number_of_signaling_packets: u8 = data.len().div_ceil(chunk_size).try_into().expect("payload too large");
+        for (i, chunk) in data.chunks(chunk_size).chain(repeat([].as_slice())).enumerate() {
             buffer.write_be(&SignalHeader {
                 transaction_label,
                 packet_type,
                 message_type,
             });
             if matches!(packet_type, PacketType::Start) {
-                buffer.write_be(&u8::try_from(number_of_signaling_packets).expect("payload too large"));
+                buffer.write_be(&number_of_signaling_packets);
             }
             if matches!(packet_type, PacketType::Single | PacketType::Start) {
                 buffer.write_be(&SignalIdentifierField { signal_identifier });
             }
             buffer.extend_from_slice(chunk);
             self.write(buffer.split().freeze())?;
-            packet_type = match i + 1 < number_of_signaling_packets {
-                true => PacketType::Continue,
-                false => PacketType::End
-            };
+            match (i + 1).cmp(&(number_of_signaling_packets as usize)) {
+                Ordering::Less => packet_type = PacketType::Continue,
+                Ordering::Equal => packet_type = PacketType::End,
+                Ordering::Greater => break
+            }
         }
         Ok(())
     }
@@ -273,6 +278,7 @@ impl SignalChannelExt for Channel {
 mod tests {
     use bytes::{Buf, Bytes, BytesMut};
     use instructor::{Buffer, BufferMut};
+
     use crate::avdtp::packets::{MediaType, ServiceCategory, SignalMessageAssembler, StreamEndpoint, StreamEndpointType};
 
     #[test]
