@@ -4,6 +4,38 @@ use tracing::warn;
 use crate::{ensure, hci};
 use crate::l2cap::channel::Channel;
 
+// ([AVDTP] Section 8.6.2).
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Exstruct, Instruct)]
+#[instructor(endian = "big")]
+struct StreamEndpoint {
+    #[instructor(bitfield(u8))]
+    #[instructor(bits(2..8))]
+    seid: u8,
+    #[instructor(bits(1..2))]
+    in_use: bool,
+    #[instructor(bitfield(u8))]
+    #[instructor(bits(4..8))]
+    media_type: MediaType,
+    #[instructor(bits(3..4))]
+    tsep: StreamEndpointType,
+}
+
+// ([Assigned Numbers] Section 6.3.1).
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Exstruct, Instruct)]
+#[repr(u8)]
+pub enum MediaType {
+    Audio = 0x00,
+    Video = 0x01,
+    Multimedia = 0x02,
+}
+
+// ([Assigned Numbers] Section 6.3.1).
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Exstruct, Instruct)]
+#[repr(u8)]
+pub enum StreamEndpointType {
+    Source = 0x00,
+    Sink = 0x01,
+}
 
 // ([AVDTP] Section 8.4.2).
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Exstruct, Instruct)]
@@ -203,7 +235,8 @@ impl SignalChannelExt for Channel {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use crate::avdtp::packets::{SignalMessageAssembler};
+    use instructor::Buffer;
+    use crate::avdtp::packets::{MediaType, SignalMessageAssembler, StreamEndpoint, StreamEndpointType};
 
     #[test]
     fn test_packets() {
@@ -212,4 +245,17 @@ mod tests {
         let mut assember = SignalMessageAssembler::default();
         println!("{:?}", assember.process_msg(data).unwrap());
     }
+
+    #[test]
+    fn test_endpoint_struct() {
+        let data: &[u8] = &[0x04, 0x08];
+        let ep: StreamEndpoint = data.clone().read().unwrap();
+        assert_eq!(ep, StreamEndpoint {
+            seid: 0x01,
+            in_use: false,
+            media_type: MediaType::Audio,
+            tsep: StreamEndpointType::Sink
+        });
+    }
+
 }
