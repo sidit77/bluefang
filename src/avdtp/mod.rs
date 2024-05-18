@@ -2,6 +2,9 @@ mod packets;
 mod error;
 
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::{Stdin, Write};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use instructor::{Buffer, BufferMut};
@@ -117,8 +120,10 @@ impl AvdtpSession {
         let seid = self.next_connection.take().unwrap();
         info!("New AVDTP transport channel for 0x{:02x}", seid);
 
+        let mut sink = File::create("output.sbc").unwrap();
         while let Some(packet) = channel.read().await {
             info!("Received {} bytes on transport channel for seid 0x{:02x}", packet.len(), seid);
+            sink.write_all(&packet[13..]).expect("Failed to write to ffplay");
         }
     }
 
