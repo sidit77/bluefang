@@ -8,8 +8,10 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use instructor::{Buffer, BufferMut};
+use instructor::utils::u24;
 use tokio::spawn;
 use tracing::{info, trace, warn};
+use crate::a2dp::AacMediaCodecInformationRaw;
 use crate::avdtp::error::ErrorCode;
 use crate::avdtp::packets::{AudioCodec, MediaType, MessageType, ServiceCategory, SignalChannelExt, SignalIdentifier, SignalMessage, SignalMessageAssembler, StreamEndpoint, StreamEndpointType};
 use crate::hci::Error;
@@ -38,11 +40,28 @@ impl Default for AvdtpServer {
                     media_type: MediaType::Audio,
                     capabilities: vec![
                         (ServiceCategory::MediaTransport, Bytes::new()),
+                        //(ServiceCategory::MediaCodec, {
+                        //    let mut codec = BytesMut::new();
+                        //    codec.put_u8((MediaType::Audio as u8) << 4);
+                        //    codec.put_u8(AudioCodec::Sbc as u8);
+                        //    codec.put_slice(&[0xff, 0xff, 0x02, 0x35]);
+                        //    codec.freeze()
+                        //}),
                         (ServiceCategory::MediaCodec, {
                             let mut codec = BytesMut::new();
                             codec.put_u8((MediaType::Audio as u8) << 4);
-                            codec.put_u8(AudioCodec::Sbc as u8);
-                            codec.put_slice(&[0xff, 0xff, 0x02, 0x35]);
+                            codec.put_u8(AudioCodec::Mpeg24Acc as u8);
+                            codec.write_be(&AacMediaCodecInformationRaw {
+                                object_type: {
+                                    1 << 5 // AAC LC
+                                    //u8::MAX
+                                },
+                                drc: true,
+                                sampling_frequency: u16::MAX,
+                                channels: u8::MAX,
+                                vbr: true,
+                                bit_rate: u24::try_from(0x0409b6u32).unwrap(),
+                            });
                             codec.freeze()
                         }),
                     ]
@@ -123,7 +142,7 @@ impl AvdtpSession {
         let mut sink = File::create("output.sbc").unwrap();
         while let Some(packet) = channel.read().await {
             info!("Received {} bytes on transport channel for seid 0x{:02x}", packet.len(), seid);
-            sink.write_all(&packet[13..]).expect("Failed to write to ffplay");
+            sink.write_all(&packet[12..]).expect("Failed to write to ffplay");
         }
     }
 
