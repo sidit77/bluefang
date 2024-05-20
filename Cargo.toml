@@ -21,3 +21,5 @@ instructor = { path = "../instructor/instructor", features = ["derive"] }
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 anyhow = "1.0.82"
+cpal = "0.15.3"
+libsbc-sys = { path = "../../RustRepos/libsbc-rs/libsbc-sys" }
