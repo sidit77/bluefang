@@ -2,140 +2,485 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use bytes::BufMut;
-use tracing::{debug, error};
+use tracing::{debug, error, trace};
 use crate::ensure;
-use crate::hci::{Error, FirmwareLoader, Hci, Opcode, OpcodeGroup};
+use crate::hci::{Error, FirmwareLoader, Hci, LocalVersion, Opcode, OpcodeGroup};
 use crate::hci::consts::CoreVersion;
 use crate::hci::consts::CoreVersion::*;
 
-const RTK_ROM_LMP_8723A: u16 = 0x1200;
-const RTK_ROM_LMP_8723B: u16 = 0x8723;
-const RTK_ROM_LMP_8821A: u16 = 0x8821;
-const RTK_ROM_LMP_8761A: u16 = 0x8761;
-const RTK_ROM_LMP_8822B: u16 = 0x8822;
-const RTK_ROM_LMP_8852A: u16 = 0x8852;
+const RTL_ROM_LMP_8703B: u16 = 0x8703;
+const RTL_ROM_LMP_8723A: u16 = 0x1200;
+const RTL_ROM_LMP_8723B: u16 = 0x8723;
+const RTL_ROM_LMP_8821A: u16 = 0x8821;
+const RTL_ROM_LMP_8761A: u16 = 0x8761;
+const RTL_ROM_LMP_8822B: u16 = 0x8822;
+const RTL_ROM_LMP_8852A: u16 = 0x8852;
+const RTL_ROM_LMP_8851B: u16 = 0x8851;
+
+//const CHIP_ID_8723A: u16 = 0x00;
+//const CHIP_ID_8723B: u16 = 0x01;
+//const CHIP_ID_8821A: u16 = 0x02;
+//const CHIP_ID_8761A: u16 = 0x03;
+//const CHIP_ID_8822B: u16 = 0x08;
+//const CHIP_ID_8723D: u16 = 0x09;
+//const CHIP_ID_8821C: u16 = 0x0A;
+//const CHIP_ID_8822C: u16 = 0x0D;
+//const CHIP_ID_8761B: u16 = 0x0E;
+//const CHIP_ID_8852A: u16 = 0x12;
+//const CHIP_ID_8852B: u16 = 0x14;
+//const CHIP_ID_8852C: u16 = 0x19;
+//const CHIP_ID_8851B: u16 = 0x24;
+//const CHIP_ID_8852BT: u16 = 0x2F;
+
+const CHIP_TYPE_8723CS_CG: u8 = 0x03;
+const CHIP_TYPE_8723CS_VF: u8 = 0x04;
+const CHIP_TYPE_8723CS_XX: u8 = 0x05;
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum HciBus {
+    Uart, Usb
+}
+
+struct MatchFlags;
+
+impl MatchFlags {
+    const LMP_SUBVERSION: u8 = 0x01;
+    const HCI_SUBVERSION: u8 = 0x02;
+    const HCI_VERSION: u8 = 0x04;
+    const HCI_BUS: u8 = 0x08;
+    const HCI_CHIP_ID: u8 = 0x10;
+}
+
+//bitflags! {
+//    #[derive(Debug, Copy, Clone, Eq, PartialEq)]
+//    struct MatchFlags: u8 {
+//        const LMP_SUBVERSION = 0x01;
+//        const HCI_SUBVERSION = 0x02;
+//        const HCI_VERSION = 0x04;
+//        const HCI_BUS = 0x08;
+//        const HCI_CHIP_ID = 0x10;
+//    }
+//}
 
 #[allow(dead_code)]
 #[derive(Debug, Copy, Clone)]
 struct DriverInfo {
-    rom: u16,
-    hci: (u16, CoreVersion),
+    flags: u8,
+    lmp_subversion: u16,
+    hci_subversion: u16,
+    hci_version: CoreVersion,
+    hci_bus: HciBus,
+    chip_type: u8,
     config_needed: bool,
     has_rom_version: bool,
     has_msft_ext: bool,
-    fw_name: &'static str,
-    config_name: &'static str
+    firmware_name: &'static str,
+    config_name: &'static str,
+    chip_name: &'static str,
+}
+
+impl DriverInfo {
+
+    const fn is_enabled(&self, flags: u8) -> bool {
+        self.flags & flags == flags
+    }
+
+    fn matches(&self, lmp_subversion: u16, hci_subversion: u16, hci_version: CoreVersion, hci_bus: HciBus, chip_type: u8) -> bool {
+        (!self.is_enabled(MatchFlags::LMP_SUBVERSION) || self.lmp_subversion == lmp_subversion) &&
+        (!self.is_enabled(MatchFlags::HCI_SUBVERSION) || self.hci_subversion == hci_subversion) &&
+        (!self.is_enabled(MatchFlags::HCI_VERSION) || self.hci_version == hci_version) &&
+        (!self.is_enabled(MatchFlags::HCI_BUS) || self.hci_bus == hci_bus) &&
+        (!self.is_enabled(MatchFlags::HCI_CHIP_ID) || self.chip_type == chip_type)
+    }
+
 }
 
 const DRIVER_INFOS: &[DriverInfo] = &[
+
+    /* 8723A */
     DriverInfo {
-        rom: RTK_ROM_LMP_8723A,
-        hci: (0x0B, V4_0),
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8723A,
+        hci_subversion: 0xb,
+        hci_version: V4_0,
+        hci_bus: HciBus::Usb,
+        chip_type: 0,
         config_needed: false,
         has_rom_version: false,
         has_msft_ext: false,
-        fw_name: "rtl8723a_fw.bin",
+        firmware_name: "rtl8723a_fw.bin",
         config_name: "",
+        chip_name: "rtl8723au",
     },
+
+    /* 8723BS */
     DriverInfo {
-        rom: RTK_ROM_LMP_8723B,
-        hci: (0x0B, V4_0),
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8723B,
+        hci_subversion: 0xb,
+        hci_version: V4_0,
+        hci_bus: HciBus::Uart,
+        chip_type: 0,
+        config_needed: true,
+        has_rom_version: true,
+        has_msft_ext: false,
+        firmware_name: "rtl8723bs_fw.bin",
+        config_name: "rtl8723bs_config.bin",
+        chip_name: "rtl8723bs"
+    },
+
+    /* 8723B */
+    DriverInfo {
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8723B,
+        hci_subversion: 0xb,
+        hci_version: V4_0,
+        hci_bus: HciBus::Usb,
+        chip_type: 0,
         config_needed: false,
         has_rom_version: true,
         has_msft_ext: false,
-        fw_name: "rtl8723b_fw.bin",
+        firmware_name: "rtl8723b_fw.bin",
         config_name: "rtl8723b_config.bin",
+        chip_name: "rtl8723bu"
     },
+
+    /* 8723CS-CG */
     DriverInfo {
-        rom: RTK_ROM_LMP_8723B,
-        hci: (0x0D, V4_2),
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_CHIP_ID | MatchFlags::HCI_BUS,
+        lmp_subversion: RTL_ROM_LMP_8703B,
+        hci_subversion: 0,
+        chip_type: CHIP_TYPE_8723CS_CG,
+        hci_bus: HciBus::Uart,
         config_needed: true,
         has_rom_version: true,
         has_msft_ext: false,
-        fw_name: "rtl8723d_fw.bin",
+        firmware_name: "rtl8723cs_cg_fw.bin",
+        config_name: "rtl8723cs_cg_config.bin",
+        chip_name: "rtl8723cs-cg",
+        hci_version: V1_0
+    },
+
+    /* 8723CS-VF */
+    DriverInfo {
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_CHIP_ID |MatchFlags::HCI_BUS,
+        lmp_subversion: RTL_ROM_LMP_8703B,
+        hci_subversion: 0,
+        chip_type: CHIP_TYPE_8723CS_VF,
+        hci_bus: HciBus::Uart,
+        config_needed: true,
+        has_rom_version: true,
+        has_msft_ext: false,
+        firmware_name: "rtl8723cs_vf_fw.bin",
+        config_name: "rtl8723cs_vf_config.bin",
+        chip_name: "rtl8723cs-vf",
+        hci_version: V1_0
+    },
+
+    /* 8723CS-XX */
+    DriverInfo {
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_CHIP_ID | MatchFlags::HCI_BUS,
+        lmp_subversion: RTL_ROM_LMP_8703B,
+        hci_subversion: 0,
+        chip_type: CHIP_TYPE_8723CS_XX,
+        hci_bus: HciBus::Uart,
+        config_needed: true,
+        has_rom_version: true,
+        has_msft_ext: false,
+        firmware_name: "rtl8723cs_xx_fw.bin",
+        config_name: "rtl8723cs_xx_config.bin",
+        chip_name: "rtl8723cs",
+        hci_version: V1_0
+    },
+
+    /* 8723D */
+    DriverInfo {
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8723B,
+        hci_subversion: 0xd,
+        hci_version: V4_2,
+        hci_bus: HciBus::Usb,
+        chip_type: 0,
+        config_needed: true,
+        has_rom_version: true,
+        has_msft_ext: false,
+        firmware_name: "rtl8723d_fw.bin",
         config_name: "rtl8723d_config.bin",
+        chip_name: "rtl8723du"
     },
+
+    /* 8723DS */
     DriverInfo {
-        rom: RTK_ROM_LMP_8821A,
-        hci: (0x0A, V4_0),
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8723B,
+        hci_subversion: 0xd,
+        hci_version: V4_2,
+        hci_bus: HciBus::Uart,
+        chip_type: 0,
+        config_needed: true,
+        has_rom_version: true,
+        has_msft_ext: false,
+        firmware_name: "rtl8723ds_fw.bin",
+        config_name: "rtl8723ds_config.bin",
+        chip_name: "rtl8723ds"
+    },
+
+    /* 8821A */
+    DriverInfo {
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8821A,
+        hci_subversion: 0xa,
+        hci_version: V4_0,
+        hci_bus: HciBus::Usb,
+        chip_type: 0,
         config_needed: false,
         has_rom_version: true,
         has_msft_ext: false,
-        fw_name: "rtl8821a_fw.bin",
+        firmware_name: "rtl8821a_fw.bin",
         config_name: "rtl8821a_config.bin",
+        chip_name: "rtl8821au"
     },
+
+    /* 8821C */
     DriverInfo {
-        rom: RTK_ROM_LMP_8821A,
-        hci: (0x0C, V4_2),
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8821A,
+        hci_subversion: 0xc,
+        hci_version: V4_2,
+        hci_bus: HciBus::Usb,
+        chip_type: 0,
         config_needed: false,
         has_rom_version: true,
         has_msft_ext: true,
-        fw_name: "rtl8821c_fw.bin",
+        firmware_name: "rtl8821c_fw.bin",
         config_name: "rtl8821c_config.bin",
+        chip_name: "rtl8821cu"
     },
+
+    /* 8821CS */
     DriverInfo {
-        rom: RTK_ROM_LMP_8761A,
-        hci: (0x0A, V4_0),
-        config_needed: false,
-        has_rom_version: true,
-        has_msft_ext: false,
-        fw_name: "rtl8761a_fw.bin",
-        config_name: "rtl8761a_config.bin",
-    },
-    DriverInfo {
-        rom: RTK_ROM_LMP_8761A,
-        hci: (0x0B, V5_1),
-        config_needed: false,
-        has_rom_version: true,
-        has_msft_ext: false,
-        fw_name: "rtl8761bu_fw.bin",
-        config_name: "rtl8761bu_config.bin",
-    },
-    DriverInfo {
-        rom: RTK_ROM_LMP_8822B,
-        hci: (0x0C, V5_1),
-        config_needed: false,
-        has_rom_version: true,
-        has_msft_ext: true,
-        fw_name: "rtl8822cu_fw.bin",
-        config_name: "rtl8822cu_config.bin",
-    },
-    DriverInfo {
-        rom: RTK_ROM_LMP_8822B,
-        hci: (0x0B, V4_1),
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8821A,
+        hci_subversion: 0xc,
+        hci_version: V4_2,
+        hci_bus: HciBus::Uart,
+        chip_type: 0,
         config_needed: true,
         has_rom_version: true,
         has_msft_ext: true,
-        fw_name: "rtl8822b_fw.bin",
+        firmware_name: "rtl8821cs_fw.bin",
+        config_name: "rtl8821cs_config.bin",
+        chip_name: "rtl8821cs"
+    },
+
+    /* 8761A */
+    DriverInfo {
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8761A,
+        hci_subversion: 0xa,
+        hci_version: V4_0,
+        hci_bus: HciBus::Usb,
+        chip_type: 0,
+        config_needed: false,
+        has_rom_version: true,
+        has_msft_ext: false,
+        firmware_name: "rtl8761a_fw.bin",
+        config_name: "rtl8761a_config.bin",
+        chip_name: "rtl8761au"
+    },
+
+    /* 8761B */
+    DriverInfo {
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8761A,
+        hci_subversion: 0xb,
+        hci_version: V5_1,
+        hci_bus: HciBus::Uart,
+        chip_type: 0,
+        config_needed: false,
+        has_rom_version: true,
+        has_msft_ext: true,
+        firmware_name: "rtl8761b_fw.bin",
+        config_name: "rtl8761b_config.bin",
+        chip_name: "rtl8761btv"
+    },
+
+    /* 8761BU */
+    DriverInfo {
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8761A,
+        hci_subversion: 0xb,
+        hci_version: V5_1,
+        hci_bus: HciBus::Usb,
+        chip_type: 0,
+        config_needed: false,
+        has_rom_version: true,
+        has_msft_ext: false,
+        firmware_name: "rtl8761bu_fw.bin",
+        config_name: "rtl8761bu_config.bin",
+        chip_name: "rtl8761bu"
+    },
+
+    /* 8822C with UART interface */
+    DriverInfo {
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8822B,
+        hci_subversion: 0xc,
+        hci_version: V4_2,
+        hci_bus: HciBus::Uart,
+        chip_type: 0,
+        config_needed: true,
+        has_rom_version: true,
+        has_msft_ext: true,
+        firmware_name: "rtl8822cs_fw.bin",
+        config_name: "rtl8822cs_config.bin",
+        chip_name: "rtl8822cs"
+    },
+
+    /* 8822C with UART interface */
+    DriverInfo {
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8822B,
+        hci_subversion: 0xc,
+        hci_version: V5_1,
+        hci_bus: HciBus::Uart,
+        chip_type: 0,
+        config_needed: true,
+        has_rom_version: true,
+        has_msft_ext: true,
+        firmware_name: "rtl8822cs_fw.bin",
+        config_name: "rtl8822cs_config.bin",
+        chip_name: "rtl8822cs"
+    },
+
+    /* 8822C with USB interface */
+    DriverInfo {
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8822B,
+        hci_subversion: 0xc,
+        hci_version: V5_1,
+        hci_bus: HciBus::Usb,
+        chip_type: 0,
+        config_needed: false,
+        has_rom_version: true,
+        has_msft_ext: true,
+        firmware_name: "rtl8822cu_fw.bin",
+        config_name: "rtl8822cu_config.bin",
+        chip_name: "rtl8822cu"
+    },
+
+    /* 8822B */
+    DriverInfo {
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8822B,
+        hci_subversion: 0xb,
+        hci_version: V4_1,
+        hci_bus: HciBus::Usb,
+        chip_type: 0,
+        config_needed: true,
+        has_rom_version: true,
+        has_msft_ext: true,
+        firmware_name: "rtl8822b_fw.bin",
         config_name: "rtl8822b_config.bin",
+        chip_name: "rtl8822bu"
     },
+
+    /* 8852A */
     DriverInfo {
-        rom: RTK_ROM_LMP_8852A,
-        hci: (0x0A, V5_2),
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8852A,
+        hci_subversion: 0xa,
+        hci_version: V5_2,
+        hci_bus: HciBus::Usb,
+        chip_type: 0,
         config_needed: false,
         has_rom_version: true,
         has_msft_ext: true,
-        fw_name: "rtl8852au_fw.bin",
+        firmware_name: "rtl8852au_fw.bin",
         config_name: "rtl8852au_config.bin",
+        chip_name: "rtl8852au"
     },
+
+    /* 8852B with UART interface */
     DriverInfo {
-        rom:RTK_ROM_LMP_8852A,
-        hci: (0xB, V5_2),
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8852A,
+        hci_subversion: 0xb,
+        hci_version: V5_2,
+        hci_bus: HciBus::Uart,
+        chip_type: 0,
+        config_needed: true,
+        has_rom_version: true,
+        has_msft_ext: true,
+        firmware_name: "rtl8852bs_fw.bin",
+        config_name: "rtl8852bs_config.bin",
+        chip_name: "rtl8852bs"
+    },
+
+    /* 8852B */
+    DriverInfo {
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8852A,
+        hci_subversion: 0xb,
+        hci_version: V5_2,
+        hci_bus: HciBus::Usb,
+        chip_type: 0,
         config_needed: false,
         has_rom_version: true,
         has_msft_ext: true,
-        fw_name: "rtl8852bu_fw.bin",
+        firmware_name: "rtl8852bu_fw.bin",
         config_name: "rtl8852bu_config.bin",
+        chip_name: "rtl8852bu"
     },
+
+    /* 8852C */
     DriverInfo {
-        rom: RTK_ROM_LMP_8852A,
-        hci: (0x0C, V5_3),
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8852A,
+        hci_subversion: 0xc,
+        hci_version: V5_3,
+        hci_bus: HciBus::Usb,
+        chip_type: 0,
         config_needed: false,
         has_rom_version: true,
         has_msft_ext: true,
-        fw_name: "rtl8852cu_fw.bin",
+        firmware_name: "rtl8852cu_fw.bin",
         config_name: "rtl8852cu_config.bin",
-    }
+        chip_name: "rtl8852cu"
+    },
+
+    /* 8851B */
+    DriverInfo {
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8851B,
+        hci_subversion: 0xb,
+        hci_version: V5_3,
+        hci_bus: HciBus::Usb,
+        chip_type: 0,
+        config_needed: false,
+        has_rom_version: true,
+        has_msft_ext: false,
+        firmware_name: "rtl8851bu_fw.bin",
+        config_name: "rtl8851bu_config.bin",
+        chip_name: "rtl8851bu"
+    },
+
+    /* 8852BT/8852BE-VT */
+    DriverInfo {
+        flags: MatchFlags::LMP_SUBVERSION | MatchFlags::HCI_SUBVERSION | MatchFlags::HCI_VERSION | MatchFlags::HCI_BUS ,
+        lmp_subversion: RTL_ROM_LMP_8852A,
+        hci_subversion: 0x87,
+        hci_version: V5_3,
+        hci_bus: HciBus::Usb,
+        chip_type: 0,
+        config_needed: false,
+        has_rom_version: true,
+        has_msft_ext: true,
+        firmware_name: "rtl8852btu_fw.bin",
+        config_name: "rtl8852btu_config.bin",
+        chip_name: "rtl8852btu"
+    },
+
 ];
 
 pub fn find_binary_path(file_name: &str) -> Option<PathBuf> {
@@ -194,6 +539,11 @@ async fn download_for_rtl8723b(host: &Hci, info: DriverInfo, firmware: Vec<u8>, 
     Ok(())
 }
 
+const RTL_CHIP_SUBVER: [u8; 5] = [0x10, 0x38, 0x04, 0x28, 0x80];
+const RTL_CHIP_REV   : [u8; 5] = [0x10, 0x3A, 0x04, 0x28, 0x80];
+const RTL_SEC_PROJ   : [u8; 5] = [0x10, 0xA4, 0x0D, 0x00, 0xb0];
+const RTL_CPIP_TYPE   : [u8; 5] = [0x00, 0x94, 0xa0, 0x00, 0xb0];
+
 #[derive(Default, Debug, Copy, Clone)]
 pub struct RealTekFirmwareLoader;
 
@@ -202,18 +552,37 @@ impl RealTekFirmwareLoader {
         Self::default()
     }
 
+    async fn find_chip_info(&self, hci: &Hci) -> Result<(u16, u16, CoreVersion, u8), Error> {
+        let lmp_subversion = hci.read_reg16(RTL_CHIP_SUBVER).await?;
+        if lmp_subversion == RTL_ROM_LMP_8822B {
+            let hci_subversion = hci.read_reg16(RTL_CHIP_REV).await?;
+            if hci_subversion == 0x0003 {
+                return Ok((lmp_subversion, hci_subversion, V5_3, 0));
+            }
+        }
+        let LocalVersion { hci_version, hci_subversion, lmp_subversion, .. } = hci.read_local_version().await?;
+        let chip_type = match lmp_subversion {
+            RTL_ROM_LMP_8703B => {
+                let [_status, chip_type] = hci.read_reg16(RTL_CPIP_TYPE).await?.to_le_bytes();
+                chip_type & 0x0F
+            },
+            _ => 0
+        };
+        Ok((lmp_subversion, hci_subversion, hci_version, chip_type))
+    }
+
     async fn try_load_firmware(&self, hci: &Hci) -> Result<bool, Error> {
         //TODO Do the vid/pid check
-        let local_version = hci.read_local_version().await?;
+
+        let (lmp_subversion, hci_subversion, hci_version, chip_type) = self.find_chip_info(hci).await?;
         let info = DRIVER_INFOS
             .into_iter()
-            .find(|info|
-                info.rom == local_version.lmp_subversion &&
-                    info.hci == (local_version.hci_subversion, local_version.hci_version))
-            .copied().ok_or(Error::from("Failed to find driver info"))?;
+            .find(|info| info.matches(lmp_subversion, hci_subversion, hci_version, HciBus::Usb, chip_type))
+            .copied()
+            .ok_or(Error::from("Failed to find driver info"))?;
         debug!("found driver info: {:?}", info);
 
-        let firmware_path = find_binary_path(info.fw_name)
+        let firmware_path = find_binary_path(info.firmware_name)
             .ok_or(Error::from("Failed to find firmware file"))?;
         debug!("firmware path: {:?}", firmware_path);
         let firmware = tokio::fs::read(firmware_path)
@@ -227,7 +596,7 @@ impl RealTekFirmwareLoader {
                 .ok_or(Error::from("Failed to find config file"))?;
             let config = tokio::fs::read(config_path)
                 .await
-                .map_err(|_| Error::from("Failed to find load firmware config"))?;
+                .map_err(|_| Error::from("Failed to find load firmware config.bin"))?;
             Some(config)
         } else {
             None
@@ -235,14 +604,14 @@ impl RealTekFirmwareLoader {
         if config.is_none() && info.config_needed {
             return Err(Error::from("Config needed, but no config file available"));
         }
-
         //TODO update this code to support other chips as well
-        match info.rom {
-            RTK_ROM_LMP_8723B | RTK_ROM_LMP_8821A | RTK_ROM_LMP_8761A | RTK_ROM_LMP_8822B | RTK_ROM_LMP_8852A => {
-                download_for_rtl8723b(hci, info, firmware, config).await.map(|_| true)
-            },
-            _ => Err(Error::from("ROM not supported"))
-        }
+        //match info.rom {
+        //    RTK_ROM_LMP_8723B | RTK_ROM_LMP_8821A | RTK_ROM_LMP_8761A | RTK_ROM_LMP_8822B | RTK_ROM_LMP_8852A => {
+        //        download_for_rtl8723b(hci, info, firmware, config).await.map(|_| true)
+        //    },
+        //    _ => Err(Error::from("ROM not supported"))
+        //}
+        Ok(true)
     }
 }
 
@@ -257,6 +626,9 @@ trait RtkHciExit {
     async fn read_rom_version(&self) -> Result<u8, Error>;
     async fn download(&self, index: u8, data: &[u8]) -> Result<u8, Error>;
 
+    async fn read_reg16(&self, cmd: [u8; 5]) -> Result<u16, Error>;
+
+    //async fn core_dump(&self) -> Result<(), Error>;
 }
 
 impl RtkHciExit for Hci {
@@ -273,6 +645,21 @@ impl RtkHciExit for Hci {
             })
             .await
     }
+
+    async fn read_reg16(&self, cmd: [u8; 5]) -> Result<u16, Error> {
+        self.call_with_args(Opcode::new(OpcodeGroup::Vendor, 0x0061), |p| {
+            p.put_slice(&cmd);
+        }).await
+    }
+
+    //async fn core_dump(&self) -> Result<(), Error> {
+    //    self.call_with_args(Opcode::new(OpcodeGroup::Vendor, 0x00FF), |p| {
+    //        p.put_u8(0x00);
+    //        p.put_u8(0x00);
+    //    }).await?;
+    //    Ok(())
+    //}
+
 }
 
 const EPATCH_SIGNATURE: &[u8] = b"Realtech";
