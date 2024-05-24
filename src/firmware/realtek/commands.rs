@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use bytes::BufMut;
 use crate::hci::{Error, Hci, Opcode, OpcodeGroup};
 
@@ -12,6 +14,8 @@ pub trait RtkHciExit {
     async fn download(&self, index: u8, data: &[u8]) -> Result<u8, Error>;
 
     async fn read_reg16(&self, cmd: [u8; 5]) -> Result<u16, Error>;
+
+    async fn drop_firmware(&self) -> Result<(), Error>;
 
     //async fn core_dump(&self) -> Result<(), Error>;
 }
@@ -35,6 +39,10 @@ impl RtkHciExit for Hci {
         self.call_with_args(Opcode::new(OpcodeGroup::Vendor, 0x0061), |p| {
             p.put_slice(&cmd);
         }).await
+    }
+
+    async fn drop_firmware(&self) -> Result<(), Error> {
+        self.call(Opcode::new(OpcodeGroup::Vendor, 0x0066)).await
     }
 
     //async fn core_dump(&self) -> Result<(), Error> {

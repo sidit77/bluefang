@@ -307,17 +307,17 @@ impl SignalMessageResponse {
         }
     }
 
-    pub fn accept<F: FnOnce(&mut BytesMut)>(&self, f: F) -> SignalMessage {
-        SignalMessage {
-            transaction_label: self.transaction_label,
-            message_type: MessageType::ResponseAccept,
-            signal_identifier: self.signal_identifier,
-            data: {
-                let mut buf = BytesMut::new();
-                f(&mut buf);
-                buf.freeze()
-            },
-        }
-    }
+    //pub fn accept<F: FnOnce(&mut BytesMut)>(&self, f: F) -> SignalMessage {
+    //    SignalMessage {
+    //        transaction_label: self.transaction_label,
+    //        message_type: MessageType::ResponseAccept,
+    //        signal_identifier: self.signal_identifier,
+    //        data: {
+    //            let mut buf = BytesMut::new();
+    //            f(&mut buf);
+    //            buf.freeze()
+    //        },
+    //    }
+    //}
 
 }

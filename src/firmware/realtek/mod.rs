@@ -4,12 +4,11 @@ mod info;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
-use bytes::BufMut;
-use tracing::{debug, error, trace};
+use tracing::{debug, error};
 use crate::ensure;
 use crate::firmware::realtek::commands::{RtkHciExit, RTL_CHIP_REV, RTL_CHIP_SUBVER, RTL_CHIP_TYPE};
-use crate::firmware::realtek::info::{DRIVER_INFOS, DriverInfo, HciBus, RTL_ROM_LMP_8703B, RTL_ROM_LMP_8822B};
-use crate::hci::{Error, FirmwareLoader, Hci, LocalVersion, Opcode, OpcodeGroup};
+use crate::firmware::realtek::info::*;
+use crate::hci::{Error, FirmwareLoader, Hci, LocalVersion};
 use crate::hci::consts::CoreVersion;
 use crate::hci::consts::CoreVersion::*;
 
@@ -20,55 +19,6 @@ pub fn find_binary_path(file_name: &str) -> Option<PathBuf> {
     let file = dir.join(file_name);
     file.exists().then_some(file)
 }
-
-const RTK_FRAGMENT_LENGTH: usize = 252;
-
-async fn download_for_rtl8723b(host: &Hci, info: DriverInfo, firmware: Vec<u8>, config: Option<Vec<u8>>) -> Result<(), Error> {
-    let version = if info.has_rom_version {
-        let version= host.read_rom_version().await?;
-        debug!("firmware version before download: {}", version);
-        version as u16
-    } else {
-        0
-    };
-    let firmware = Firmware::from_bytes(&firmware)?;
-    debug!("firmware: project_id=0x{:04X}", firmware.project_id);
-    let patch = firmware
-        .patches
-        .into_iter()
-        .find(|patch| patch.chip_id == version + 1)
-        .ok_or(Error::from("Failed to find patch for current firmware version"))?;
-    debug!("using patch {}", patch.chip_id);
-    let mut payload = patch.data;
-    // Append the config if there is one.
-    if let Some(config) = config {
-        payload.extend(config);
-    }
-
-    // Download the payload, one fragment at a time.
-    for (fragment_index, fragment) in payload.chunks(RTK_FRAGMENT_LENGTH).into_iter().enumerate() {
-        // NOTE: the Linux driver somehow adds 1 to the index after it wraps around.
-        // That's odd, but we"ll do the same here.
-        let mut download_index = fragment_index & 0x7F;
-        if download_index >= 0x80 {
-            download_index += 1;
-        }
-        if (fragment_index + 1) * RTK_FRAGMENT_LENGTH >= payload.len() {
-            download_index |= 0x80; // End marker
-        }
-        debug!("downloading fragment {}", fragment_index);
-        host.download(download_index as u8, fragment).await?;
-    }
-    debug!("download complete");
-    host.read_rom_version()
-        .await
-        .map(|v| debug!("firmware version after download: {}", v))
-        .unwrap_or_else(|err| error!("failed to read firmware version: {}", err));
-
-
-    Ok(())
-}
-
 
 
 #[derive(Default, Debug, Copy, Clone)]
@@ -101,12 +51,25 @@ impl RealTekFirmwareLoader {
     async fn try_load_firmware(&self, hci: &Hci) -> Result<bool, Error> {
         //TODO Do the vid/pid check
 
-        let (lmp_subversion, hci_subversion, hci_version, chip_type) = self.find_chip_info(hci).await?;
-        let info = DRIVER_INFOS
-            .into_iter()
-            .find(|info| info.matches(lmp_subversion, hci_subversion, hci_version, HciBus::Usb, chip_type))
-            .copied()
-            .ok_or(Error::from("Failed to find driver info"))?;
+        let mut drop_firmware = true;
+        let (lmp_subversion, info) = loop {
+            let (lmp_subversion, hci_subversion, hci_version, chip_type) = self.find_chip_info(hci).await?;
+            let info = DRIVER_INFOS
+                .into_iter()
+                .find(|info| info.matches(lmp_subversion, hci_subversion, hci_version, HciBus::Usb, chip_type))
+                .copied();
+            match info {
+                Some(info) => break (lmp_subversion, info),
+                None if drop_firmware => {
+                    //debug!("Dropping current firmware");
+                    drop_firmware = false;
+                    //hci.drop_firmware();
+                    //tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                }
+                None => return Err(Error::from("Failed to find driver info"))
+            }
+        };
+
         debug!("found driver info: {:?}", info);
 
         let firmware_path = find_binary_path(info.firmware_name)
@@ -115,8 +78,6 @@ impl RealTekFirmwareLoader {
         let firmware = tokio::fs::read(firmware_path)
             .await
             .map_err(|_| Error::from("Failed to find load firmware"))?;
-
-
 
         let config = if !info.config_name.is_empty() {
             let config_path = find_binary_path(info.config_name)
@@ -131,13 +92,18 @@ impl RealTekFirmwareLoader {
         if config.is_none() && info.config_needed {
             return Err(Error::from("Config needed, but no config file available"));
         }
-        //TODO update this code to support other chips as well
-        //match info.rom {
-        //    RTK_ROM_LMP_8723B | RTK_ROM_LMP_8821A | RTK_ROM_LMP_8761A | RTK_ROM_LMP_8822B | RTK_ROM_LMP_8852A => {
-        //        download_for_rtl8723b(hci, info, firmware, config).await.map(|_| true)
-        //    },
-        //    _ => Err(Error::from("ROM not supported"))
-        //}
+
+        match lmp_subversion {
+            RTL_ROM_LMP_8723A => download_for_rtl8723a(hci, firmware).await?,
+            RTL_ROM_LMP_8723B |
+            RTL_ROM_LMP_8821A |
+            RTL_ROM_LMP_8761A |
+            RTL_ROM_LMP_8822B |
+            RTL_ROM_LMP_8852A |
+            RTL_ROM_LMP_8703B |
+            RTL_ROM_LMP_8851B => download_for_rtl8723b(hci, info, firmware, config).await?,
+            _ =>  debug!("assuming no firmware upload needed for this chip")
+        }
         Ok(true)
     }
 }
@@ -148,8 +114,64 @@ impl FirmwareLoader for RealTekFirmwareLoader {
     }
 }
 
+const RTK_FRAGMENT_LENGTH: usize = 252;
+async fn download_firmware(host: &Hci, firmware: Vec<u8>) -> Result<(), Error> {
+    // Download the payload, one fragment at a time.
+    for (fragment_index, fragment) in firmware.chunks(RTK_FRAGMENT_LENGTH).into_iter().enumerate() {
+        // NOTE: the Linux driver somehow adds 1 to the index after it wraps around.
+        // That's odd, but we"ll do the same here.
+        let mut download_index = fragment_index & 0x7F;
+        if download_index >= 0x80 {
+            download_index += 1;
+        }
+        if (fragment_index + 1) * RTK_FRAGMENT_LENGTH >= firmware.len() {
+            download_index |= 0x80; // End marker
+        }
+        debug!("downloading fragment {}", fragment_index);
+        host.download(download_index as u8, fragment).await?;
+    }
+    debug!("download complete");
+    Ok(())
+}
+
+async fn download_for_rtl8723a(host: &Hci, firmware: Vec<u8>) -> Result<(), Error> {
+    ensure!(firmware.len() >= 8, "Firmware too short");
+    ensure!(!firmware.starts_with(EPATCH_SIGNATURE), "Unexpected epatch signature");
+    download_firmware(host, firmware).await
+}
+
+async fn download_for_rtl8723b(host: &Hci, info: DriverInfo, firmware: Vec<u8>, config: Option<Vec<u8>>) -> Result<(), Error> {
+    let version = if info.has_rom_version {
+        let version= host.read_rom_version().await?;
+        debug!("firmware version before download: {}", version);
+        version as u16
+    } else {
+        0
+    };
+    let firmware = Firmware::from_bytes(&firmware)?;
+    debug!("firmware: project_id=0x{:04X}", firmware.project_id);
+    let patch = firmware
+        .patches
+        .into_iter()
+        .find(|patch| patch.chip_id == version + 1)
+        .ok_or(Error::from("Failed to find patch for current firmware version"))?;
+    debug!("using patch {}", patch.chip_id);
+    let mut payload = patch.data;
+    // Append the config if there is one.
+    if let Some(config) = config {
+        payload.extend(config);
+    }
+
+    download_firmware(host, payload).await?;
+    host.read_rom_version()
+        .await
+        .map(|v| debug!("firmware version after download: {}", v))
+        .unwrap_or_else(|err| error!("failed to read firmware version: {}", err));
+    Ok(())
+}
 
 const EPATCH_SIGNATURE: &[u8] = b"Realtech";
+const EPATCH_SIGNATURE_V2: &[u8] = b"RTBTCore";
 const EXTENSION_SIGNATURE: &[u8] = &[0x51, 0x04, 0xFD, 0x77];
 const EPATCH_HEADER_SIZE: usize = 14;
 
@@ -171,7 +193,8 @@ struct Firmware {
 impl Firmware {
 
     fn from_bytes(firmware: &[u8]) -> Result<Self, Error> {
-        ensure!(firmware.starts_with(EPATCH_SIGNATURE), "Firmware does not start with epatch signature");
+        ensure!(firmware.starts_with(EPATCH_SIGNATURE) || firmware.starts_with(EPATCH_SIGNATURE_V2),
+            "Firmware does not start with epatch signature");
         ensure!(firmware.ends_with(EXTENSION_SIGNATURE), "Firmware does not end with extension sig");
         //The firmware should start with a 14 byte header.
         ensure!(firmware.len() >= EPATCH_HEADER_SIZE, "Firmware too short");
