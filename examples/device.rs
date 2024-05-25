@@ -15,14 +15,15 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use bluefang::avdtp::AvdtpServer;
 
 use bluefang::firmware::RealTekFirmwareLoader;
 use bluefang::hci::connection::ConnectionManagerBuilder;
 use bluefang::hci::consts::{ClassOfDevice, MajorDeviceClass, MajorServiceClasses};
 use bluefang::hci::Hci;
 use bluefang::host::usb::UsbController;
-use bluefang::l2cap::start_l2cap_server;
-
+use bluefang::l2cap::{AVDTP_PSM, L2capServerBuilder, SDP_PSM};
+use bluefang::sdp::SdpServer;
 
 
 #[tokio::main]
@@ -57,14 +58,14 @@ async fn main() -> anyhow::Result<()> {
             .with_link_key_store("link-keys.dat")
             .spawn(host.clone())
             .await?;
-        start_l2cap_server(host.clone())?;
+        let _l2cap_server = L2capServerBuilder::default()
+            .with_server(SDP_PSM, SdpServer::default())
+            .with_server(AVDTP_PSM, AvdtpServer::default())
+            .spawn(host.clone())?;
 
-        //let (acl_in, acl_out) = host.acl().await?;
-        //spawn(do_l2cap(acl_in, acl_out));
         host.write_local_name("redtest").await?;
         host.write_class_of_device(cod).await?;
         host.set_scan_enabled(true, true).await?;
-        //host.inquiry(Lap::General, 5, 0).await?;
 
         tokio::signal::ctrl_c().await?;
     }

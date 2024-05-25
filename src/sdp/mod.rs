@@ -13,7 +13,7 @@ use tokio::spawn;
 use tracing::{error, trace, warn};
 use crate::{ensure, hci};
 use crate::l2cap::channel::Channel;
-use crate::l2cap::Server;
+use crate::l2cap::{AVDTP_PSM, Server};
 use crate::sdp::error::{Error, SdpErrorCodes};
 use crate::sdp::service::{Service, ServiceAttribute};
 
@@ -62,8 +62,6 @@ const BT_AUDIO_SINK_SERVICE: Uuid = Uuid::from_u16(0x110b);
 const BT_L2CAP_PROTOCOL_ID: Uuid = Uuid::from_u16(0x0100);
 const BT_AVDTP_PROTOCOL_ID: Uuid = Uuid::from_u16(0x0019);
 const BT_ADVANCED_AUDIO_DISTRIBUTION_SERVICE: Uuid = Uuid::from_u16(0x110d);
-
-const AVDTP_PSM: u16 = 0x0019;
 
 impl Default for SdpServer {
     fn default() -> Self {

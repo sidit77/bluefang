@@ -11,68 +11,81 @@ use instructor::utils::Length;
 use tokio::{select, spawn};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::mpsc::{UnboundedSender as MpscSender};
+use tokio::task::JoinHandle;
 use tracing::{debug, trace, warn};
-use crate::avdtp::AvdtpServer;
 use crate::ensure;
 use crate::hci::acl::{AclDataAssembler, AclHeader};
 use crate::hci::consts::{EventCode, LinkType, RemoteAddr, Status};
 use crate::hci::{AclSender, Error, Hci};
 use crate::l2cap::channel::Channel;
-use crate::sdp::SdpServer;
+
+pub const SDP_PSM: u16 = 0x0001;
+pub const AVDTP_PSM: u16 = 0x0019;
+
+
 
 const CID_ID_NONE: u16 = 0x0000;
 const CID_ID_SIGNALING: u16 = 0x0001;
 const CID_RANGE_DYNAMIC: Range<u16> = 0x0040..0xFFFF;
 
-pub fn start_l2cap_server(hci: Arc<Hci>) -> Result<(), Error> {
-    let mut servers: BTreeMap<u64, Box<dyn Server + Send>> = BTreeMap::new();
-    servers.insert(0x01, Box::new(SdpServer::default()));
-    servers.insert(0x019, Box::new(AvdtpServer::default()));
-    let mut data = {
-        let (tx, rx) = unbounded_channel();
-        hci.register_data_handler(tx)?;
-        rx
-    };
-    let mut events = {
-        let (tx, rx) = unbounded_channel();
-        hci.register_event_handler(
-            [
-                EventCode::ConnectionComplete,
-                EventCode::DisconnectionComplete,
-                EventCode::MaxSlotsChange
-            ],
-            tx)?;
-        rx
-    };
-    let sender = hci.get_acl_sender();
-    spawn(async move {
-        let mut state = State {
-            sender,
-            connections: Default::default(),
-            servers,
-            channels: Default::default(),
-            next_signaling_id: Arc::new(Default::default()),
+#[derive(Default)]
+pub struct L2capServerBuilder {
+    servers: BTreeMap<u64, Box<dyn Server + Send>>,
+}
+
+impl L2capServerBuilder {
+
+    pub fn with_server<P: Into<u64>, S: Server + Send + 'static>(mut self, psm: P, server: S) -> Self {
+        self.servers.insert(psm.into(), Box::new(server));
+        self
+    }
+
+    pub fn spawn(self, hci: Arc<Hci>) -> Result<JoinHandle<()>, Error> {
+        let mut data = {
+            let (tx, rx) = unbounded_channel();
+            hci.register_data_handler(tx)?;
+            rx
         };
+        let mut events = {
+            let (tx, rx) = unbounded_channel();
+            hci.register_event_handler(
+                [
+                    EventCode::ConnectionComplete,
+                    EventCode::DisconnectionComplete,
+                    EventCode::MaxSlotsChange
+                ],
+                tx)?;
+            rx
+        };
+        let sender = hci.get_acl_sender();
+        Ok(spawn(async move {
+            let mut state = State {
+                sender,
+                connections: Default::default(),
+                servers: self.servers,
+                channels: Default::default(),
+                next_signaling_id: Arc::new(Default::default()),
+            };
 
-        loop {
-            select! {
-                Some(event) = events.recv() => {
-                    if let Err(err) = state.handle_event(event) {
-                        warn!("Error handling event: {:?}", err);
-                    }
-                },
-                Some(data) = data.recv() => {
-                    if let Err(err) = state.handle_data(data) {
-                        warn!("Error handling data: {:?}", err);
-                    }
-                },
-                else => break,
-
+            loop {
+                select! {
+                    Some(event) = events.recv() => {
+                        if let Err(err) = state.handle_event(event) {
+                            warn!("Error handling event: {:?}", err);
+                        }
+                    },
+                    Some(data) = data.recv() => {
+                        if let Err(err) = state.handle_data(data) {
+                            warn!("Error handling data: {:?}", err);
+                        }
+                    },
+                    else => break,
+                }
             }
-        }
-        trace!("L2CAP server finished");
-    });
-    Ok(())
+            trace!("L2CAP server finished");
+        }))
+    }
+
 }
 
 #[allow(dead_code)]
