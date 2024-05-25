@@ -43,20 +43,18 @@ impl Hci {
     }
 
     /// ([Vol 4] Part E, Section 7.1.10).
-    pub async fn link_key_present(&self, bd_addr: RemoteAddr, key: &LinkKey) -> Result<(), Error> {
+    pub async fn link_key_present(&self, bd_addr: RemoteAddr, key: &LinkKey) -> Result<RemoteAddr, Error> {
         self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x000B), |p| {
             p.write_le(&bd_addr);
             p.write_le(key);
-        }).await?;
-        Ok(())
+        }).await
     }
 
     /// ([Vol 4] Part E, Section 7.1.11).
-    pub async fn link_key_not_present(&self, bd_addr: RemoteAddr) -> Result<(), Error> {
+    pub async fn link_key_not_present(&self, bd_addr: RemoteAddr) -> Result<RemoteAddr, Error> {
         self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x000C), |p| {
             p.write_le(&bd_addr);
-        }).await?;
-        Ok(())
+        }).await
     }
 
     /// ([Vol 4] Part E, Section 7.1.12).
