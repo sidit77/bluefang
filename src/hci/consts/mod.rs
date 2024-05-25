@@ -91,7 +91,7 @@ pub enum Role {
     Slave = 0x01,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Exstruct, Instruct)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Exstruct, Instruct)]
 pub struct RemoteAddr([u8; 6]);
 
 impl Display for RemoteAddr {
@@ -112,4 +112,25 @@ impl AsRef<[u8]> for RemoteAddr {
     fn as_ref(&self) -> &[u8] {
         &self.0
     }
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Eq, Exstruct, Instruct)]
+pub struct LinkKey([u8; 16]);
+
+impl Debug for LinkKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:02X?}", &self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Exstruct, Instruct)]
+#[repr(u8)]
+pub enum LinkKeyType {
+    Combination = 0x00,
+    DebugCombination = 0x01,
+    UnauthenticatedCombinationP192 = 0x02,
+    AuthenticatedCombinationP192 = 0x03,
+    ChangedCombination = 0x04,
+    UnauthenticatedCombinationP256 = 0x05,
+    AuthenticatedCombinationP256 = 0x06,
 }

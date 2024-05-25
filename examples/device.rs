@@ -12,7 +12,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 use bluefang::firmware::RealTekFirmwareLoader;
-use bluefang::hci::connection::handle_connection;
+use bluefang::hci::connection::ConnectionManagerBuilder;
 use bluefang::hci::consts::{ClassOfDevice, MajorDeviceClass, MajorServiceClasses};
 use bluefang::hci::Hci;
 use bluefang::host::usb::UsbController;
@@ -35,7 +35,6 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to find device")?
         .claim()?;
 
-
     let cod = ClassOfDevice {
         major_service_classes: MajorServiceClasses::Audio | MajorServiceClasses::Rendering,
         major_device_classes: MajorDeviceClass::AudioVideo,
@@ -46,7 +45,10 @@ async fn main() -> anyhow::Result<()> {
 
     let host = Arc::new(Hci::new(usb).await?);
     {
-        handle_connection(host.clone())?;
+        let _conn_manager = ConnectionManagerBuilder::default()
+            .with_link_key_store("link-keys.dat")
+            .spawn(host.clone())
+            .await?;
         start_l2cap_server(host.clone())?;
 
         //let (acl_in, acl_out) = host.acl().await?;

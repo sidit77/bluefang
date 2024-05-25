@@ -1,7 +1,7 @@
 use bytes::BufMut;
-use instructor::BufferMut;
+use instructor::{BufferMut};
 use crate::hci::{Error, Hci, Opcode, OpcodeGroup};
-use crate::hci::consts::{Lap, RemoteAddr, Role, Status};
+use crate::hci::consts::{Lap, LinkKey, RemoteAddr, Role, Status};
 
 impl Hci {
 
@@ -42,6 +42,24 @@ impl Hci {
         Ok(())
     }
 
+    /// ([Vol 4] Part E, Section 7.1.10).
+    pub async fn link_key_present(&self, bd_addr: RemoteAddr, key: &LinkKey) -> Result<(), Error> {
+        self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x000B), |p| {
+            p.write_le(&bd_addr);
+            p.write_le(key);
+        }).await?;
+        Ok(())
+    }
+
+    /// ([Vol 4] Part E, Section 7.1.11).
+    pub async fn link_key_not_present(&self, bd_addr: RemoteAddr) -> Result<(), Error> {
+        self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x000C), |p| {
+            p.write_le(&bd_addr);
+        }).await?;
+        Ok(())
+    }
+
+    /// ([Vol 4] Part E, Section 7.1.12).
     pub async fn pin_code_request_reply(&self, bd_addr: RemoteAddr, pin: &str) -> Result<RemoteAddr, Error> {
         assert!(pin.len() <= 16);
         self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x000D), |p| {
@@ -53,4 +71,3 @@ impl Hci {
     }
 
 }
-
