@@ -6,6 +6,7 @@ use anyhow::Context;
 use cpal::{default_host, SampleFormat};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use libsbc_sys::sbc_struct;
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -44,6 +45,7 @@ async fn main() -> anyhow::Result<()> {
     println!("Class of Device: {:?}", cod);
 
     let host = Arc::new(Hci::new(usb).await?);
+    info!("Local BD_ADDR: {}", host.read_bd_addr().await?);
     {
         let _conn_manager = ConnectionManagerBuilder::default()
             .with_link_key_store("link-keys.dat")

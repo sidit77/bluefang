@@ -165,7 +165,7 @@ impl State {
 
     fn process_hci_event(&mut self, mut data: Bytes) -> Result<bool, Error> {
         let header: EventHeader = data.read_le()?;
-        trace!("Received HCI event: {:?}", header.code);
+        //trace!("Received HCI event: {:?}", header.code);
         match header.code {
             EventCode::CommandComplete | EventCode::CommandStatus => {
                 // ([Vol 4] Part E, Section 7.7.14).

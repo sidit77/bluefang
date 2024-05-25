@@ -1,8 +1,9 @@
 use std::fmt::{Display, Formatter};
+use enum_iterator::Sequence;
 use instructor::{Exstruct, Instruct};
 
 /// HCI event codes ([Vol 4] Part E, Section 7.7).
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Exstruct)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Exstruct, Sequence)]
 #[repr(u8)]
 pub enum EventCode {
     InquiryComplete = 0x01,
@@ -14,7 +15,7 @@ pub enum EventCode {
     RemoteNameRequestComplete = 0x07,
     EncryptionChange = 0x08,
     ChangeConnectionLinkKeyComplete = 0x09,
-    MasterLinkKeyComplete = 0x0A,
+    LinkKeyTypeChanged = 0x0A,
     ReadRemoteSupportedFeaturesComplete = 0x0B,
     ReadRemoteVersionInformationComplete = 0x0C,
     QosSetupComplete = 0x0D,
@@ -71,6 +72,7 @@ pub enum EventCode {
     SamStatusChange = 0x58,
     Vendor = 0xFF,
 }
+
 
 /// HCI status codes ([Vol 1] Part F, Section 1.3).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Instruct, Exstruct)]
@@ -162,3 +164,97 @@ impl Display for Status {
 }
 
 impl std::error::Error for Status {}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Instruct)]
+pub struct EventMask(u64);
+
+impl EventMask {
+
+    /// Returns an all-zero event mask that disables all maskable events.
+    #[inline(always)]
+    pub const fn none() -> Self {
+        Self(0)
+    }
+
+    pub fn all() -> Self {
+        enum_iterator::all::<EventCode>().fold(EventMask::none(), |mask, e| mask.with(e, true))
+    }
+
+    // Enables or disables the specified event.
+    #[inline(always)]
+    pub fn with(mut self, c: EventCode, enable: bool) -> Self {
+        let mask = c.to_mask_bits();
+        if enable {
+            self.0 |= mask;
+        } else {
+            self.0 &= !mask;
+        }
+        self
+    }
+
+}
+
+impl Default for EventMask {
+    fn default() -> Self {
+        Self::all()
+    }
+}
+
+impl EventCode {
+
+    // ([Vol 4] Part E, Section 7.3.1)
+    pub fn to_mask_bits(self) -> u64 {
+        match self {
+            EventCode::InquiryComplete => 1u64 << 0,
+            EventCode::InquiryResult => 1u64 << 1,
+            EventCode::ConnectionComplete => 1u64 << 2,
+            EventCode::ConnectionRequest => 1u64 << 3,
+            EventCode::DisconnectionComplete => 1u64 << 4,
+            EventCode::AuthenticationComplete => 1u64 << 5,
+            EventCode::RemoteNameRequestComplete => 1u64 << 6,
+            EventCode::EncryptionChange => 1u64 << 7,
+            EventCode::ChangeConnectionLinkKeyComplete =>1u64 << 8,
+            EventCode::LinkKeyTypeChanged => 1u64 << 9,
+            EventCode::ReadRemoteSupportedFeaturesComplete => 1u64 << 10,
+            EventCode::ReadRemoteVersionInformationComplete => 1u64 << 11,
+            EventCode::QosSetupComplete => 1u64 << 12,
+            EventCode::HardwareError => 1u64 << 15,
+            EventCode::FlushOccurred => 1u64 << 16,
+            EventCode::RoleChange => 1u64 << 17,
+            EventCode::ModeChange => 1u64 << 19,
+            EventCode::ReturnLinkKeys => 1u64 << 20,
+            EventCode::PinCodeRequest => 1u64 << 21,
+            EventCode::LinkKeyRequest => 1u64 << 22,
+            EventCode::LinkKeyNotification => 1u64 << 23,
+            EventCode::LoopbackCommand => 1u64 << 24,
+            EventCode::DataBufferOverflow => 1u64 << 25,
+            EventCode::MaxSlotsChange => 1u64 << 26,
+            EventCode::ReadClockOffsetComplete => 1u64 << 27,
+            EventCode::ConnectionPacketTypeChanged => 1u64 << 28,
+            EventCode::QosViolation => 1u64 << 29,
+            EventCode::PageScanRepetitionModeChange => 1u64 << 31,
+            EventCode::FlowSpecificationComplete => 1u64 << 32,
+            EventCode::InquiryResultWithRssi => 1u64 << 33,
+            EventCode::ReadRemoteExtendedFeaturesComplete => 1u64 << 34,
+            EventCode::SynchronousConnectionComplete => 1u64 << 43,
+            EventCode::SynchronousConnectionChanged => 1u64 << 44,
+            EventCode::SniffSubrating => 1u64 << 45,
+            EventCode::ExtendedInquiryResult => 1u64 << 46,
+            EventCode::EncryptionKeyRefreshComplete => 1u64 << 47,
+            EventCode::IoCapabilityRequest => 1u64 << 48,
+            EventCode::IoCapabilityResponse => 1u64 << 49,
+            EventCode::UserConfirmationRequest => 1u64 << 50,
+            EventCode::UserPasskeyRequest => 1u64 << 51,
+            EventCode::RemoteOobDataRequest => 1u64 << 52,
+            EventCode::SimplePairingComplete => 1u64 << 53,
+            EventCode::LinkSupervisionTimeoutChanged => 1u64 << 55,
+            EventCode::EnhancedFlushComplete => 1u64 << 56,
+            EventCode::UserPasskeyNotification => 1u64 << 58,
+            EventCode::KeypressNotification => 1u64 << 59,
+            EventCode::RemoteHostSupportedFeaturesNotification => 1u64 << 60,
+            EventCode::LeMeta => 1u64 << 61,
+
+            _ => 0
+        }
+    }
+}

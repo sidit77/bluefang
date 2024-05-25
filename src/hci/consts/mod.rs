@@ -134,3 +134,41 @@ pub enum LinkKeyType {
     UnauthenticatedCombinationP256 = 0x05,
     AuthenticatedCombinationP256 = 0x06,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Exstruct, Instruct)]
+#[repr(u8)]
+pub enum IoCapability {
+    DisplayOnly = 0x00,
+    DisplayYesNo = 0x01,
+    KeyboardOnly = 0x02,
+    NoInputNoOutput = 0x03,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Exstruct, Instruct)]
+#[repr(u8)]
+pub enum AuthenticationRequirements {
+    NoBondingUnprotected = 0x00,
+    NoBondingProtected = 0x01,
+    DedicatedBondingUnprotected = 0x02,
+    DedicatedBondingProtected = 0x03,
+    GeneralBondingUnprotected = 0x04,
+    GeneralBondingProtected = 0x05,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Exstruct, Instruct)]
+#[repr(u8)]
+pub enum OobDataPresence {
+    NotPresent = 0x00,
+    P192Present = 0x01,
+    P256Present = 0x02,
+    P196AndP256Present = 0x03,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Exstruct, Instruct)]
+#[repr(u8)]
+pub enum KeypressNotificationType {
+    EntryStarted = 0x00,
+    DigitEntered = 0x01,
+    DigitErased = 0x02,
+    Cleared = 0x03,
+    EntryCompleted = 0x04,
+}

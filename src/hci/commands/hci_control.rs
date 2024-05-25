@@ -2,10 +2,17 @@ use bytes::BufMut;
 use instructor::{BufferMut, LittleEndian};
 use crate::hci::{Error, Hci};
 use crate::hci::commands::{Opcode, OpcodeGroup};
-use crate::hci::consts::ClassOfDevice;
+use crate::hci::consts::{ClassOfDevice, EventMask};
 
 /// Controller and baseband commands ([Vol 4] Part E, Section 7.3).
 impl Hci {
+
+    pub async fn set_event_mask(&self, mask: EventMask) -> Result<(), Error> {
+        self.call_with_args(Opcode::new(OpcodeGroup::HciControl, 0x0001), |p| {
+            p.write_le(&mask);
+        }).await
+    }
+
     /// Resets the controller's link manager, baseband, and link layer
     /// ([Vol 4] Part E, Section 7.3.2).
     pub async fn reset(&self) -> Result<(), Error> {
@@ -38,5 +45,18 @@ impl Hci {
         }).await
     }
 
+    /// ([Vol 4] Part E, Section 7.3.59).
+    pub async fn set_simple_pairing_support(&self, enabled: bool) -> Result<(), Error> {
+        self.call_with_args(Opcode::new(OpcodeGroup::HciControl, 0x0056), |p| {
+            p.write_le(&enabled);
+        }).await
+    }
+
+    /// ([Vol 4] Part E, Section 7.3.92).
+    pub async fn set_secure_connections_support(&self, enabled: bool) -> Result<(), Error> {
+        self.call_with_args(Opcode::new(OpcodeGroup::HciControl, 0x007A), |p| {
+            p.write_le(&enabled);
+        }).await
+    }
 
 }

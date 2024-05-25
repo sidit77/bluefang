@@ -1,7 +1,7 @@
 use instructor::Exstruct;
 use crate::hci::{Error, Hci};
 use crate::hci::commands::{Opcode, OpcodeGroup};
-use crate::hci::consts::{CompanyId, CoreVersion};
+use crate::hci::consts::{CompanyId, CoreVersion, RemoteAddr};
 
 /// Informational parameters commands ([Vol 4] Part E, Section 7.4).
 impl Hci {
@@ -22,6 +22,11 @@ impl Hci {
     /// ([Vol 4] Part E, Section 7.4.5).
     pub async fn read_buffer_size(&self) -> Result<BufferSizes, Error> {
         self.call(Opcode::new(OpcodeGroup::InfoParams, 0x0005)).await
+    }
+
+    /// ([Vol 4] Part E, Section 7.4.6).
+    pub async fn read_bd_addr(&self) -> Result<RemoteAddr, Error> {
+        self.call(Opcode::new(OpcodeGroup::InfoParams, 0x0009)).await
     }
 
 }

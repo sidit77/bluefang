@@ -1,7 +1,7 @@
 use bytes::BufMut;
 use instructor::{BufferMut};
 use crate::hci::{Error, Hci, Opcode, OpcodeGroup};
-use crate::hci::consts::{Lap, LinkKey, RemoteAddr, Role, Status};
+use crate::hci::consts::{AuthenticationRequirements, IoCapability, Lap, LinkKey, OobDataPresence, RemoteAddr, Role, Status};
 
 impl Hci {
 
@@ -65,6 +65,29 @@ impl Hci {
             p.write_le(&(pin.len() as u8));
             p.put_slice(pin.as_bytes());
             p.put_bytes(0, 16 - pin.len());
+        }).await
+    }
+
+    /// ([Vol 4] Part E, Section 7.1.29).
+    pub async fn io_capability_reply(
+        &self,
+        bd_addr: RemoteAddr,
+        io: IoCapability,
+        oob: OobDataPresence,
+        auth: AuthenticationRequirements
+    ) -> Result<RemoteAddr, Error> {
+        self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x002B), |p| {
+            p.write_le(&bd_addr);
+            p.write_le(&io);
+            p.write_le(&oob);
+            p.write_le(&auth);
+        }).await
+    }
+
+    /// ([Vol 4] Part E, Section 7.1.30).
+    pub async fn user_confirmation_request_accept(&self, bd_addr: RemoteAddr) -> Result<RemoteAddr, Error> {
+        self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x002C), |p| {
+            p.write_le(&bd_addr);
         }).await
     }
 

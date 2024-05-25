@@ -23,7 +23,7 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedSender as MpscSender};
 use tokio::sync::oneshot::Sender as OneshotSender;
 use tokio::time::sleep;
 use crate::host::usb::UsbHost;
-use crate::hci::consts::{EventCode, Status};
+use crate::hci::consts::{EventCode, EventMask, Status};
 
 pub use commands::*;
 use crate::hci::acl::{AclHeader, BoundaryFlag, BroadcastFlag};
@@ -65,6 +65,8 @@ impl Hci {
         debug!("HCI version: {:?}", hci.read_local_version().await?);
 
         debug!("{:?}", hci.read_local_supported_commands().await?);
+
+        hci.set_event_mask(EventMask::all()).await?;
 
         let buffer_size = hci.read_buffer_size().await?;
         hci.acl_size = buffer_size.acl_data_packet_length as usize;

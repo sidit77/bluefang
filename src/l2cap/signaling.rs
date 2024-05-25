@@ -151,7 +151,8 @@ impl State {
                     // ([Vol 3] Part A, Section 4.13).
                     let mut channels: u64 = 0;
                     channels |= 1 << 1; // L2CAP Signaling channel
-                    channels |= 1 << 2; // Connectionless reception
+                    //channels |= 1 << 2; // Connectionless reception
+                    //channels |= 1 << 7; // BR/EDR Security Manager
 
                     data.write_le(&0x0000u16); //Success
                     data.write_le(&channels);

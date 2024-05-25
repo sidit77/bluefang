@@ -15,6 +15,7 @@ num_enum = "0.7.2"
 parking_lot = "0.12.1"
 bitflags = "2.5.0"
 bytes = "1"
+enum-iterator = "2.1.0"
 instructor = { path = "../instructor/instructor", features = ["derive"] }
 
 
