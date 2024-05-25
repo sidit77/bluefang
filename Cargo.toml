@@ -23,4 +23,8 @@ instructor = { path = "../instructor/instructor", features = ["derive"] }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 anyhow = "1.0.82"
 cpal = "0.15.3"
-libsbc-sys = { path = "../../RustRepos/libsbc-rs/libsbc-sys" }
+sbc-rs = { path = "../sbc-rs" }
+rubato = "0.15.0"
+
+[profile.dev.package.rubato]
+opt-level = 2

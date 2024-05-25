@@ -1,11 +1,15 @@
-use std::iter;
-use std::mem::{size_of, zeroed};
+use std::array::from_fn;
+use std::collections::VecDeque;
+use std::iter::zip;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
 use cpal::{default_host, SampleFormat};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use libsbc_sys::sbc_struct;
+use rubato::{FftFixedIn, Resampler};
+use sbc_rs::Decoder;
+use tokio::time::Instant;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::layer;
@@ -27,6 +31,8 @@ async fn main() -> anyhow::Result<()> {
         .with(layer().without_time())
         .with(EnvFilter::from_default_env())
         .init();
+
+    //return play_saved_audio().await;
 
     Hci::register_firmware_loader(RealTekFirmwareLoader::new());
 
@@ -75,33 +81,97 @@ async fn play_saved_audio() -> anyhow::Result<()> {
         .context("failed to find output device")?;
 
     let config = device.supported_output_configs()?
-        .find(|config| config.sample_format() == SampleFormat::I16)
+        .inspect(|config| println!("supported output config: {:?}", config))
+        .find(|config| config.sample_format() == SampleFormat::I16 && config.channels() == 2)
         .context("failed to find output config")?
         .with_max_sample_rate()
         .config();
+    println!("output config: {:?}", config);
 
-    let file = std::fs::read("./target/sbc/output.sbc")?;
+    let file = std::fs::read("./target/test.sbc")?;
     let mut decoder = Decoder::new(file);
-    let mut source = iter::from_fn(move || decoder.next_frame())
-        .inspect(|frame| println!("decoded {} samples", frame.len()))
-        .flat_map(|frame| frame.into_iter())
-        .chain(iter::repeat(0));
-    //let mut source = iter::from_fn(move || decoder
-    //    .next_frame()
-    //    .map_err(|e| eprintln!("error decoding frame: {}", e))
-    //    .ok())
-    //    .flat_map(|frame| frame.data.into_iter())
+    //let mut source = iter::from_fn(move || decoder.next_frame().map(|s| s.to_vec()))
+    //    .flat_map(|frame| frame.into_iter())
+    //    .map(|s| s * 8)
     //    .chain(iter::repeat(0));
 
-    //let mut source = (0u64..)
-    //    .map(|i| (i as f32 * (100.0 + 200.0 * f32::sin(i as f32 * 0.00001)) * 2.0 * std::f32::consts::PI / 44000.0).sin())
-    //    .map(|s| (s * 0.7 * i16::MAX as f32) as i16);
+    //let mut resampler = SincFixedIn::<f32>::new(
+    //    config.sample_rate.0 as f64 / 44100.0,
+    //    1.0,
+    //    SincInterpolationParameters {
+    //        sinc_len: 256,
+    //        f_cutoff: 0.95,
+    //        oversampling_factor: 160,
+    //        interpolation: SincInterpolationType::Nearest,
+    //        window: WindowFunction::Blackman,
+    //    },
+    //    128,
+    //    2
+    //)?;
+
+    //let mut resampler = FastFixedIn::<f32>::new(
+    //    config.sample_rate.0 as f64 / 44100.0,
+    //    1.0,
+    //    PolynomialDegree::Septic,
+    //    128,
+    //    2,
+    //)?;
+
+    let mut resampler = FftFixedIn::<f32>::new(
+        44100,
+        config.sample_rate.0 as usize,
+        128,
+        1,
+        2,
+    )?;
+
+
+    let mut queue = VecDeque::new();
+    let mut input_buffers  : [_; 2] = from_fn(|_| vec![0f32; resampler.input_frames_max()]);
+    let mut output_buffers : [_; 2] = from_fn(|_| vec![0f32; resampler.output_frames_max()]);
+
+    let start_time = Instant::now();
+    let mut temp_time;
+    let mut decode_time = Duration::from_secs(0);
+    let mut resample_time = Duration::from_secs(0);
+    let mut queue_time = Duration::from_secs(0);
+
+    loop {
+        temp_time = Instant::now();
+        let Some(sample) = decoder.next_frame_lr() else { break; };
+        decode_time += temp_time.elapsed();
+
+        temp_time = Instant::now();
+        for (sample, buffer) in zip(sample.into_iter(), input_buffers.iter_mut()) {
+            buffer.clear();
+            buffer.extend(sample.iter().map(|s| *s as f32));
+        }
+        queue_time += temp_time.elapsed();
+
+        temp_time = Instant::now();
+        let (_, len) = resampler.process_into_buffer(&mut input_buffers, &mut output_buffers, None)?;
+        resample_time += temp_time.elapsed();
+        temp_time = Instant::now();
+        for (&l, &r) in zip(&output_buffers[0], &output_buffers[1]).take(len) {
+            queue.push_back((l * 8.0) as i16);
+            queue.push_back((r * 8.0) as i16);
+        }
+        queue_time += temp_time.elapsed();
+    }
+    let total_time = start_time.elapsed();
+
+    println!("done processing samples ({}ms):\n\tdecode: {}%\n\tresample: {}%\n\tqueues: {}%",
+        total_time.as_secs_f64() * 1000.0,
+        (decode_time.as_secs_f64() / total_time.as_secs_f64() * 100.0).round(),
+        (resample_time.as_secs_f64() / total_time.as_secs_f64() * 100.0).round(),
+        (queue_time.as_secs_f64() / total_time.as_secs_f64() * 100.0).round()
+    );
+
 
     let stream = device.build_output_stream(
         &config,
         move |data: &mut [i16], _info| {
-            println!("playing {} samples", data.len());
-            data.into_iter().for_each(|d| *d = source.next().unwrap());
+            data.into_iter().for_each(|d| *d = queue.pop_front().unwrap_or(0));
         },
         move |err| {
             eprintln!("an error occurred on the output stream: {}", err);
@@ -118,6 +188,7 @@ async fn play_saved_audio() -> anyhow::Result<()> {
     Ok(())
 }
 
+/*
 struct Decoder {
     buffer: Vec<u8>,
     index: usize,
@@ -158,3 +229,6 @@ impl Decoder {
     }
 
 }
+
+
+ */
