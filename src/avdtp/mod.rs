@@ -5,10 +5,11 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Write};
 use std::sync::Arc;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use instructor::{Buffer, BufferMut};
 use tokio::spawn;
 use tracing::{info, trace, warn};
+use crate::a2dp::SbcMediaCodecInformationRaw;
 use crate::avdtp::error::ErrorCode;
 use crate::avdtp::packets::{AudioCodec, MediaType, MessageType, ServiceCategory, SignalChannelExt, SignalIdentifier, SignalMessage, SignalMessageAssembler, StreamEndpoint, StreamEndpointType};
 use crate::hci::Error;
@@ -39,9 +40,17 @@ impl Default for AvdtpServer {
                         (ServiceCategory::MediaTransport, Bytes::new()),
                         (ServiceCategory::MediaCodec, {
                             let mut codec = BytesMut::new();
-                            codec.put_u8((MediaType::Audio as u8) << 4);
-                            codec.put_u8(AudioCodec::Sbc as u8);
-                            codec.put_slice(&[0xff, 0xff, 0x02, 0x35]);
+                            codec.write_be(&((MediaType::Audio as u8) << 4));
+                            codec.write_be(&AudioCodec::Sbc);
+                            codec.write_be(&SbcMediaCodecInformationRaw {
+                                sampling_frequency: u8::MAX,
+                                channel_mode: u8::MAX,
+                                block_length: u8::MAX,
+                                subbands: u8::MAX,
+                                allocation_method: u8::MAX,
+                                minimum_bitpool: 2,
+                                maximum_bitpool: 53,
+                            });
                             codec.freeze()
                         }),
                         //(ServiceCategory::MediaCodec, {
