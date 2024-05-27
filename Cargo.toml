@@ -17,14 +17,12 @@ bitflags = "2.5.0"
 bytes = "1"
 enum-iterator = "2.1.0"
 instructor = { path = "../instructor/instructor", features = ["derive"] }
-
-
-[dev-dependencies]
-tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
-anyhow = "1.0.82"
 cpal = "0.15.3"
 sbc-rs = { path = "../sbc-rs" }
 rubato = "0.15.0"
+ringbuf = "0.4.1"
+anyhow = "1.0.82"
 
-[profile.dev.package.rubato]
-opt-level = 2
+[dev-dependencies]
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+

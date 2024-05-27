@@ -1,12 +1,20 @@
 use std::array::from_fn;
 use std::collections::VecDeque;
+use std::io::Read;
 use std::iter::zip;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::Context;
-use cpal::{default_host, SampleFormat};
+use bytes::{Bytes, BytesMut};
+use cpal::{default_host, Device, SampleFormat, Stream, StreamConfig};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use instructor::BufferMut;
+use ringbuf::{CachingCons, CachingProd, HeapProd, HeapRb, SharedRb};
+use ringbuf::consumer::Consumer;
+use ringbuf::producer::Producer;
+use ringbuf::traits::{Observer, Split};
 use rubato::{FftFixedIn, Resampler};
 use sbc_rs::Decoder;
 use tokio::time::Instant;
@@ -15,7 +23,9 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use bluefang::avdtp::AvdtpServer;
+use bluefang::a2dp::SbcMediaCodecInformationRaw;
+use bluefang::avdtp::{AvdtpServer, MediaDecoder, MediaSink};
+use bluefang::avdtp::packets::{AudioCodec, MediaType, ServiceCategory};
 
 use bluefang::firmware::RealTekFirmwareLoader;
 use bluefang::hci::connection::ConnectionManagerBuilder;
@@ -76,6 +86,7 @@ async fn main() -> anyhow::Result<()> {
 
 #[allow(dead_code)]
 async fn play_saved_audio() -> anyhow::Result<()> {
+
     let host = default_host();
     let device = host
         .default_output_device()
@@ -168,7 +179,6 @@ async fn play_saved_audio() -> anyhow::Result<()> {
         (queue_time.as_secs_f64() / total_time.as_secs_f64() * 100.0).round()
     );
 
-
     let stream = device.build_output_stream(
         &config,
         move |data: &mut [i16], _info| {
@@ -179,7 +189,6 @@ async fn play_saved_audio() -> anyhow::Result<()> {
         },
         None,
     )?;
-
     stream.play()?;
 
     tokio::signal::ctrl_c().await?;
@@ -188,7 +197,145 @@ async fn play_saved_audio() -> anyhow::Result<()> {
 
     Ok(())
 }
+/*
+struct SbcAudioSink {
+    config: StreamConfig,
+    stream: Stream,
+    capabilities: Vec<(ServiceCategory, Bytes)>,
+    buffer: Arc<HeapRb<i16>>
+}
 
+impl SbcAudioSink {
+
+    pub fn new(device: &Device) -> anyhow::Result<Self> {
+        let config = device.supported_output_configs()?
+            .inspect(|config| println!("supported output config: {:?}", config))
+            .find(|config| config.sample_format() == SampleFormat::I16 && config.channels() == 2)
+            .context("failed to find output config")?
+            .with_max_sample_rate()
+            .config();
+        println!("output config: {:?}", config);
+
+        let buffer: Arc<HeapRb<i16>> = Arc::new(HeapRb::new(8192));
+        let mut consumer = CachingCons::new(buffer.clone());
+
+        let stream = device.build_output_stream(
+            &config,
+            move |data: &mut [i16], _info| {
+                let len = consumer.pop_slice(data);
+                data[len..].fill(0);
+                //data.into_iter().for_each(|d| *d = queue.pop_front().unwrap_or(0));
+            },
+            move |err| {
+                eprintln!("an error occurred on the output stream: {}", err);
+            },
+            None,
+        )?;
+
+        Ok(Self {
+            config,
+            stream,
+            capabilities: vec![
+                (ServiceCategory::MediaTransport, Bytes::new()),
+                (ServiceCategory::MediaCodec, {
+                    let mut codec = BytesMut::new();
+                    codec.write_be(&((MediaType::Audio as u8) << 4));
+                    codec.write_be(&AudioCodec::Sbc);
+                    codec.write_be(&SbcMediaCodecInformationRaw {
+                        sampling_frequency: u8::MAX,
+                        channel_mode: u8::MAX,
+                        block_length: u8::MAX,
+                        subbands: u8::MAX,
+                        allocation_method: u8::MAX,
+                        minimum_bitpool: 2,
+                        maximum_bitpool: 53,
+                    });
+                    codec.freeze()
+                })
+            ],
+            buffer,
+        })
+    }
+}
+
+impl MediaSink for SbcAudioSink {
+
+    fn media_type(&self) -> MediaType {
+        MediaType::Audio
+    }
+
+    fn capabilities(&self) -> &[(ServiceCategory, Bytes)] {
+        &self.capabilities
+    }
+
+    fn in_use(&self) -> bool {
+        self.buffer.write_is_held()
+    }
+
+    fn start(&self) {
+        self.stream.play().unwrap();
+    }
+
+    fn stop(&self) {
+        self.stream.pause().unwrap();
+    }
+
+    fn decoder(&self) -> Box<dyn MediaDecoder> {
+        Box::new(SbcAudioDecoder::new(44100, self.config.sample_rate.0 as usize, &self.buffer))
+    }
+}
+
+struct SbcAudioDecoder {
+    decoder: Decoder,
+    resampler: FftFixedIn<f32>,
+    input_buffers: [Vec<f32>; 2],
+    output_buffers: [Vec<f32>; 2],
+    queue: HeapProd<i16>,
+}
+
+impl SbcAudioDecoder {
+
+    pub fn new(input_rate: usize, output_rate: usize, buffer: &Arc<HeapRb<i16>>) -> Self {
+        let decoder = Decoder::new(Vec::new());
+        let resampler = FftFixedIn::new(
+            input_rate,
+            output_rate,
+            128,
+            1,
+            2,
+        ).unwrap();
+        let input_buffers  : [_; 2] = from_fn(|_| vec![0f32; resampler.input_frames_max()]);
+        let output_buffers : [_; 2] = from_fn(|_| vec![0f32; resampler.output_frames_max()]);
+        let queue = CachingProd::new(buffer.clone());
+
+        Self {
+            decoder,
+            resampler,
+            input_buffers,
+            output_buffers,
+            queue,
+        }
+    }
+}
+
+impl MediaDecoder for SbcAudioDecoder {
+
+    fn decode(&mut self, data: Bytes) {
+        self.decoder.refill_buffer(data.as_ref());
+        while let Some(sample) = self.decoder.next_frame_lr() {
+            for (sample, buffer) in zip(sample.into_iter(), self.input_buffers.iter_mut()) {
+                buffer.clear();
+                buffer.extend(sample.iter().map(|s| *s as f32));
+            }
+            let (_, len) = self.resampler.process_into_buffer(&mut self.input_buffers, &mut self.output_buffers, None).unwrap();
+            for (&l, &r) in zip(&self.output_buffers[0], &self.output_buffers[1]).take(len) {
+                let _ = self.queue.try_push((l * 8.0) as i16);
+                let _ = self.queue.try_push((r * 8.0) as i16);
+            }
+        }
+    }
+}
+*/
 /*
 struct Decoder {
     buffer: Vec<u8>,

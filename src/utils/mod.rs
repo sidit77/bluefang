@@ -3,6 +3,9 @@ mod bytes;
 mod mutex_cell;
 
 use std::fmt::{Debug, Formatter};
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use tokio::sync::mpsc::UnboundedSender;
 pub use iter::IteratorExt;
 pub use bytes::SliceExt;
@@ -84,3 +87,32 @@ impl<T: Clone> DoubleEndedIterator for RepeatN<T> {
 }
 
 impl<T: Clone> ExactSizeIterator for RepeatN<T> {}
+
+
+pub struct SelectAll<'a, T> {
+    futures: &'a mut [T],
+}
+
+impl<'a, T: Future + Unpin> Future for SelectAll<'a, T> {
+    type Output = (usize, T::Output);
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        for (i, future) in self.futures.iter_mut().enumerate() {
+            if let Poll::Ready(output) = Pin::new(future).poll(cx) {
+                return Poll::Ready((i, output));
+            }
+        }
+        Poll::Pending
+    }
+}
+
+pub fn select_all<T: Future + Unpin>(futures: &mut [T]) -> SelectAll<T> {
+    SelectAll { futures }
+}
+
+pub async fn stall_if_none<F: Future + Unpin>(fut: &mut Option<F>) -> F::Output {
+    match fut {
+        Some(fut) => fut.await,
+        None => std::future::pending().await
+    }
+}
