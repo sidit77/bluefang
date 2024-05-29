@@ -50,7 +50,7 @@ pub async fn event_loop(
     let mut acl_out = transport.interface.bulk_out_queue(transport.endpoints.acl_out);
 
     let mut state = State::default();
-    let log = LogWriter::new("btlog.snoop");
+    let log = LogWriter::new();
     let mut buffer = BytesMut::with_capacity(4096);
 
     loop {

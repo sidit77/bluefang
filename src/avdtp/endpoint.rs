@@ -41,7 +41,7 @@ enum StreamState {
     Open,
     Streaming,
     Closing,
-    Aborting,
+    //Aborting,
 }
 
 pub struct Stream {
@@ -129,6 +129,7 @@ impl Future for Stream {
                     match channel.receiver.poll_recv(cx) {
                         Poll::Ready(Some(ChannelEvent::DataReceived(data))) => {
                             if self.state == StreamState::Streaming {
+                                //TODO Parse the realtime media header and do something useful with it
                                 self.handler.on_data(data.slice(12..));
                             } else {
                                 warn!("Data received while not streaming");

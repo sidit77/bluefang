@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::{JoinHandle, spawn};
 use std::time::{Duration, SystemTime};
@@ -19,18 +19,26 @@ pub struct LogWriter {
 }
 
 impl LogWriter {
-    pub fn new<P: AsRef<Path>>(path: P) -> Self {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let path = path.as_ref().to_path_buf();
-        let thread = spawn(move || {
-            Self::writer_thread(path, receiver)
-                .unwrap_or_else(|err| error!("Failed to write btsnoop log: {:?}", err));
-        });
+    pub fn new() -> Self {
+        match std::env::var_os("BTSNOOP_LOG").map(PathBuf::from) {
+            Some(path) => {
+                let (sender, receiver) = std::sync::mpsc::channel();
+                let thread = spawn(move || {
+                    Self::writer_thread(path, receiver)
+                        .unwrap_or_else(|err| error!("Failed to write btsnoop log: {:?}", err));
+                });
 
-        Self {
-            sender: Some(sender),
-            thread: Some(thread),
+                Self {
+                    sender: Some(sender),
+                    thread: Some(thread),
+                }
+            }
+            None => Self {
+                sender: None,
+                thread: None,
+            }
         }
+        
     }
 
     fn writer_thread(path: PathBuf, receiver: Receiver<(SystemTime, PacketType, Bytes)>) -> std::io::Result<()> {

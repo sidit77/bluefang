@@ -1,5 +1,5 @@
 use std::array::from_fn;
-use std::iter::{repeat, zip};
+use std::iter::zip;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool};
 
@@ -188,6 +188,7 @@ impl StreamHandler for SbcStreamHandler {
     }
 
     fn on_data(&mut self, data: Bytes) {
+        //TODO actually parse the header to make sure the packets are not fragmented
         self.process_frames(&data.as_ref()[1..]);
     }
 }
@@ -195,7 +196,8 @@ impl StreamHandler for SbcStreamHandler {
 pub struct AudioSession {
     stream: Stream,
     config: StreamConfig,
-    buffer: HeapProd<i16>
+    buffer: HeapProd<i16>,
+    max_buffer_size: usize,
 }
 
 impl AudioSession {
@@ -213,7 +215,8 @@ impl AudioSession {
             .config();
         trace!("selected output config: {:?}", config);
 
-        let buffer: Arc<HeapRb<i16>> = Arc::new(HeapRb::new(100_000_000));
+        let max_buffer_size = (config.sample_rate.0 * config.channels as u32) as usize;
+        let buffer: Arc<HeapRb<i16>> = Arc::new(HeapRb::new(max_buffer_size));
         let (buffer, mut consumer) = buffer.split();
 
         let stream = device.build_output_stream(
@@ -233,6 +236,7 @@ impl AudioSession {
             stream,
             config,
             buffer,
+            max_buffer_size,
         })
     }
 
@@ -250,6 +254,10 @@ impl AudioSession {
 
     pub fn config(&self) -> &StreamConfig {
         &self.config
+    }
+
+    pub fn max_buffer_size(&self) -> usize {
+        self.max_buffer_size
     }
 
 }
