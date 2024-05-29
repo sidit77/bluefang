@@ -43,8 +43,9 @@ impl AvdtpServerBuilder {
     }
 }
 
+type ChannelSender = MutexCell<Option<Sender<Channel>>>;
 pub struct AvdtpServer {
-    pending_streams: Arc<Mutex<BTreeMap<u16, Arc<MutexCell<Option<Sender<Channel>>>>>>>,
+    pending_streams: Arc<Mutex<BTreeMap<u16, Arc<ChannelSender>>>>,
     local_endpoints: Arc<[LocalEndpoint]>,
 }
 
@@ -56,7 +57,7 @@ impl Server for AvdtpServer {
             None => {
                 trace!("New AVDTP session (signaling channel)");
                 let pending_streams = self.pending_streams.clone();
-                let pending_stream = Arc::new(MutexCell::new(None));
+                let pending_stream = Arc::new(ChannelSender::default());
                 pending_streams.lock().insert(handle, pending_stream.clone());
 
                 let local_endpoints = self.local_endpoints.clone();
@@ -99,7 +100,7 @@ impl Server for AvdtpServer {
 }
 
 struct AvdtpSession {
-    channel_sender: Arc<MutexCell<Option<Sender<Channel>>>>,
+    channel_sender: Arc<ChannelSender>,
     channel_receiver: Option<Receiver<Channel>>,
     local_endpoints: Arc<[LocalEndpoint]>,
     streams: Vec<Stream>,

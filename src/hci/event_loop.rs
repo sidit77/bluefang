@@ -29,9 +29,11 @@ pub enum EventLoopCommand {
     SetMaxInFlightAclPackets(u32),
 }
 
+pub type CmdResultSender = OneshotSender<Result<Bytes, TransferError>>;
+
 pub async fn event_loop(
     transport: UsbHost,
-    mut cmd_receiver: MpscReceiver<(Opcode, Bytes, OneshotSender<Result<Bytes, TransferError>>)>,
+    mut cmd_receiver: MpscReceiver<(Opcode, Bytes, CmdResultSender)>,
     mut acl_receiver: MpscReceiver<Bytes>,
     mut ctl_receiver: MpscReceiver<EventLoopCommand>,
 ) {
@@ -111,7 +113,7 @@ pub async fn event_loop(
                     match cmd.status {
                         Ok(_) => state.outstanding_command = Some((opcode, tx)),
                         Err(err) => {
-                            let _ = tx.send(Err(err.into()));
+                            let _ = tx.send(Err(err));
                         }
                     }
                 } else {

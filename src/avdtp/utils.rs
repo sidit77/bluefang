@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::path::Path;
 use bytes::Bytes;
 use tracing::debug;
 use crate::avdtp::packets::ServiceCategory;
@@ -30,9 +31,9 @@ pub struct FileDumpHandler {
 }
 
 impl FileDumpHandler {
-    pub fn new() -> Self {
+    pub fn new<P: AsRef<Path>>(path: P) -> Self {
         Self {
-            file: std::fs::File::create("output.sbc").unwrap(),
+            file: std::fs::File::create(path).unwrap(),
             total: 0,
         }
     }

@@ -25,9 +25,6 @@ pub fn find_binary_path(file_name: &str) -> Option<PathBuf> {
 pub struct RealTekFirmwareLoader;
 
 impl RealTekFirmwareLoader {
-    pub fn new() -> Self {
-        Self::default()
-    }
 
     async fn find_chip_info(&self, hci: &Hci) -> Result<(u16, u16, CoreVersion, u8), Error> {
         let lmp_subversion = hci.read_reg16(RTL_CHIP_SUBVER).await?;
@@ -55,7 +52,7 @@ impl RealTekFirmwareLoader {
         let (lmp_subversion, info) = loop {
             let (lmp_subversion, hci_subversion, hci_version, chip_type) = self.find_chip_info(hci).await?;
             let info = DRIVER_INFOS
-                .into_iter()
+                .iter()
                 .find(|info| info.matches(lmp_subversion, hci_subversion, hci_version, HciBus::Usb, chip_type))
                 .copied();
             match info {
@@ -117,7 +114,7 @@ impl FirmwareLoader for RealTekFirmwareLoader {
 const RTK_FRAGMENT_LENGTH: usize = 252;
 async fn download_firmware(host: &Hci, firmware: Vec<u8>) -> Result<(), Error> {
     // Download the payload, one fragment at a time.
-    for (fragment_index, fragment) in firmware.chunks(RTK_FRAGMENT_LENGTH).into_iter().enumerate() {
+    for (fragment_index, fragment) in firmware.chunks(RTK_FRAGMENT_LENGTH).enumerate() {
         // NOTE: the Linux driver somehow adds 1 to the index after it wraps around.
         // That's odd, but we"ll do the same here.
         let mut download_index = fragment_index & 0x7F;

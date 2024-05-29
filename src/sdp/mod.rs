@@ -139,7 +139,7 @@ impl SdpServer {
                         .take(maximum_service_record_count as usize)
                         .collect::<Vec<_>>();
 
-                    Ok(ResponsePacket::SearchResponse {
+                    Ok(ResponsePacket::Search {
                         total_service_record_count: maximum_service_record_count,
                         current_service_record_count: maximum_service_record_count,
                         service_record_handles: attribute_list,
@@ -173,7 +173,7 @@ impl SdpServer {
                         }
                     }
                     let to_send = buffer.split_to(buffer.len().min(maximum_attribute_byte_count as usize));
-                    Ok(ResponsePacket::AttributeResponse {
+                    Ok(ResponsePacket::Attribute {
                         attribute_list_size: to_send.len() as u16,
                         attribute_list: to_send.freeze(),
                         continuation_state: ContinuationState::last_message(buffer.is_empty())
@@ -207,7 +207,7 @@ impl SdpServer {
                         }
                     }
                     let to_send = buffer.split_to(max_attr_len.min(buffer.len()));
-                    Ok(ResponsePacket::SearchAttributeResponse {
+                    Ok(ResponsePacket::SearchAttribute {
                         attribute_list_size: to_send.len() as u16,
                         attribute_list: to_send.freeze(),
                         continuation_state: ContinuationState::last_message(buffer.is_empty())
@@ -219,7 +219,7 @@ impl SdpServer {
                 }
             }).unwrap_or_else(|err| {
                 error!("Error handling request: {:?}", err);
-                ResponsePacket::ErrorResponse(SdpErrorCodes::from(err))
+                ResponsePacket::Error(SdpErrorCodes::from(err))
             });
             let mut packet = BytesMut::new();
             packet.write(&SdpHeader {
@@ -307,22 +307,22 @@ enum PduId {
 #[instructor(endian = "big")]
 enum ResponsePacket {
     // ([Vol 3] Part B, Section 4.4.1).
-    ErrorResponse(SdpErrorCodes),
+    Error(SdpErrorCodes),
     // ([Vol 3] Part B, Section 4.5.2).
-    SearchResponse {
+    Search {
         total_service_record_count: u16,
         current_service_record_count: u16,
         service_record_handles: Vec<u32>,
         continuation_state: ContinuationState
     },
     // ([Vol 3] Part B, Section 4.6.2).
-    AttributeResponse {
+    Attribute {
         attribute_list_size: u16,
         attribute_list: Bytes,
         continuation_state: ContinuationState
     },
     // ([Vol 3] Part B, Section 4.7.2).
-    SearchAttributeResponse {
+    SearchAttribute {
         attribute_list_size: u16,
         attribute_list: Bytes,
         continuation_state: ContinuationState
@@ -332,23 +332,23 @@ enum ResponsePacket {
 impl ResponsePacket {
     pub fn pdu(&self) -> PduId {
         match self {
-            Self::ErrorResponse(_) => PduId::ErrorResponse,
-            Self::SearchResponse{ .. } => PduId::SearchResponse,
-            Self::AttributeResponse{ .. } => PduId::AttributeResponse,
-            Self::SearchAttributeResponse { .. } => PduId::SearchAttributeResponse
+            Self::Error(_) => PduId::ErrorResponse,
+            Self::Search { .. } => PduId::SearchResponse,
+            Self::Attribute { .. } => PduId::AttributeResponse,
+            Self::SearchAttribute { .. } => PduId::SearchAttributeResponse
         }
     }
 
     pub fn byte_size(&self) -> usize {
         match self {
-            Self::ErrorResponse(_) => size_of::<SdpErrorCodes>(),
-            Self::SearchResponse { service_record_handles, continuation_state, ..} => {
+            Self::Error(_) => size_of::<SdpErrorCodes>(),
+            Self::Search { service_record_handles, continuation_state, ..} => {
                 2 * size_of::<u16>() + service_record_handles.len() * size_of::<u32>() + continuation_state.byte_size()
             },
-            Self::AttributeResponse {attribute_list, continuation_state, ..} => {
+            Self::Attribute {attribute_list, continuation_state, ..} => {
                 size_of::<u16>() + attribute_list.len() + continuation_state.byte_size()
             },
-            Self::SearchAttributeResponse { attribute_list, continuation_state , .. } => {
+            Self::SearchAttribute { attribute_list, continuation_state , .. } => {
                 size_of::<u16>() + attribute_list.len() + continuation_state.byte_size()
             }
         }
@@ -366,7 +366,7 @@ impl ContinuationState {
     const CONTINUATION_STATE: [u8; 4] = *b"cont";
 
     pub fn last_message(last: bool) -> Self {
-        last.then_some(Self::None).unwrap_or(Self::Continue)
+        if last { Self::None } else { Self::Continue }
     }
 
     pub fn byte_size(self) -> usize {

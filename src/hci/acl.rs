@@ -28,14 +28,13 @@ impl AclDataAssembler {
                 warn!("A start packet should contain a valid L2CAP PDU length");
                 return None;
             }
+        } else if self.in_progress {
+            self.buffer.put(data);
         } else {
-            if self.in_progress {
-                self.buffer.put(data);
-            } else {
-                warn!("A continuation packet should not be the first packet");
-                return None;
-            }
+            warn!("A continuation packet should not be the first packet");
+            return None;
         }
+
         debug_assert!(self.in_progress);
         match self.buffer.len().cmp(&(self.l2cap_pdu_length + 4)) {
             std::cmp::Ordering::Less => None,

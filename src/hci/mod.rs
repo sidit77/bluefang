@@ -20,21 +20,20 @@ use tokio::spawn;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, trace};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender as MpscSender};
-use tokio::sync::oneshot::Sender as OneshotSender;
 use tokio::time::sleep;
 use crate::host::usb::UsbHost;
 use crate::hci::consts::{EventCode, EventMask, Status};
 
 pub use commands::*;
 use crate::hci::acl::{AclHeader, BoundaryFlag, BroadcastFlag};
-use crate::hci::event_loop::{EventLoopCommand};
+use crate::hci::event_loop::{CmdResultSender, EventLoopCommand};
 
 
 //TODO make generic over transport
 pub struct Hci {
     //transport: UsbHost,
     //router: Arc<EventRouter>,
-    cmd_out: MpscSender<(Opcode, Bytes, OneshotSender<Result<Bytes, TransferError>>)>,
+    cmd_out: MpscSender<(Opcode, Bytes, CmdResultSender)>,
     acl_out: MpscSender<Bytes>,
     ctl_out: MpscSender<EventLoopCommand>,
     acl_size: usize,
@@ -130,7 +129,8 @@ impl Hci {
     }
 
     pub async fn shutdown(&self) -> Result<(), Error> {
-        if let Some(event_loop) = self.event_loop.lock().take() {
+        let handle = self.event_loop.lock().take();
+        if let Some(event_loop) = handle {
             self.reset().await?;
             self.ctl_out.send(EventLoopCommand::Shutdown).map_err(|_| Error::EventLoopClosed)?;
             event_loop.await.unwrap();
@@ -220,15 +220,15 @@ pub trait FirmwareLoader {
     fn try_load_firmware<'a>(&'a self, hci: &'a Hci) -> Pin<Box<dyn Future<Output=Result<bool, Error>> + Send + 'a>>;
 }
 
-static FIRMWARE_LOADERS: Mutex<Vec<Box<dyn FirmwareLoader + Send>>> = Mutex::new(Vec::new());
+static FIRMWARE_LOADERS: tokio::sync::Mutex<Vec<Box<dyn FirmwareLoader + Send>>> = tokio::sync::Mutex::const_new(Vec::new());
 impl Hci {
 
-    pub fn register_firmware_loader<FL: FirmwareLoader + Send + 'static>(loader: FL) {
-        FIRMWARE_LOADERS.lock().push(Box::new(loader));
+    pub async fn register_firmware_loader<FL: FirmwareLoader + Send + 'static>(loader: FL) {
+        FIRMWARE_LOADERS.lock().await.push(Box::new(loader));
     }
 
     async fn try_load_firmware(&self) {
-        for loader in &*FIRMWARE_LOADERS.lock() {
+        for loader in &*FIRMWARE_LOADERS.lock().await {
             match loader.try_load_firmware(self).await {
                 Ok(true) => break,
                 Ok(false) => continue,
