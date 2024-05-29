@@ -2,10 +2,11 @@ pub mod packets;
 pub mod error;
 pub mod endpoint;
 pub mod utils;
+pub mod capabilities;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use instructor::{Buffer, BufferMut};
 use parking_lot::Mutex;
 use tokio::{select, spawn};
@@ -15,13 +16,14 @@ use tokio::task::spawn_blocking;
 use tracing::{debug, info, trace, warn};
 use crate::avdtp::endpoint::Stream;
 use crate::avdtp::error::ErrorCode;
-use crate::avdtp::packets::{MessageType, ServiceCategory, SignalChannelExt, SignalIdentifier, SignalMessage, SignalMessageAssembler};
+use crate::avdtp::packets::{MessageType, SignalChannelExt, SignalIdentifier, SignalMessage, SignalMessageAssembler};
 use crate::hci::Error;
 use crate::l2cap::channel::Channel;
 use crate::l2cap::Server;
 use crate::utils::{MutexCell, select_all, stall_if_none};
 
 pub use endpoint::{StreamHandler, LocalEndpoint};
+use crate::avdtp::capabilities::Capability;
 
 #[derive(Default)]
 pub struct AvdtpServerBuilder {
@@ -166,11 +168,7 @@ impl AvdtpSession {
                 let ep = self.local_endpoints.iter()
                     .find(|ep| ep.seid == seid)
                     .ok_or(ErrorCode::BadAcpSeid)?;
-                for (category, caps) in ep.capabilities.iter() {
-                    buf.write_be(category);
-                    buf.write_be(&u8::try_from(caps.len()).expect("Capabilities to big"));
-                    buf.write_be(caps);
-                }
+                buf.write(&ep.capabilities);
                 Ok(())
             }),
             // ([AVDTP] Section 8.9).
@@ -178,15 +176,7 @@ impl AvdtpSession {
                 //TODO add the required parameters to a reject
                 let acp_seid = data.read_be::<u8>()? >> 2;
                 let int_seid = data.read_be::<u8>()? >> 2;
-                let mut buffer = BytesMut::new();
-                let mut capabilities = Vec::new();
-                while !data.is_empty() {
-                    let service: ServiceCategory = data.read_be()?;
-                    //info!("SET CONFIG (0x{:02x} -> 0x{:02x}): {:?}", int_seid, acp_seid, service);
-                    let length: u8 = data.read_be()?;
-                    buffer.put(data.split_to(length as usize));
-                    capabilities.push((service, buffer.split().freeze()));
-                }
+                let capabilities: Vec<Capability> = data.read_be()?;
                 data.finish()?;
                 let ep = self.local_endpoints.iter()
                     .find(|ep| ep.seid == acp_seid)

@@ -6,10 +6,9 @@ use std::sync::atomic::{AtomicBool};
 use std::time::Duration;
 
 use anyhow::Context;
-use bytes::{Bytes, BytesMut};
+use bytes::{Bytes};
 use cpal::{default_host, SampleFormat, Stream};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use instructor::BufferMut;
 use ringbuf::{HeapProd, HeapRb};
 use ringbuf::consumer::Consumer;
 use ringbuf::producer::Producer;
@@ -25,7 +24,8 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use bluefang::a2dp::SbcMediaCodecInformationRaw;
 use bluefang::avdtp::{AvdtpServerBuilder, LocalEndpoint, StreamHandler};
-use bluefang::avdtp::packets::{AudioCodec, MediaType, ServiceCategory, StreamEndpointType};
+use bluefang::avdtp::capabilities::Capability;
+use bluefang::avdtp::packets::{MediaType, StreamEndpointType};
 
 use bluefang::firmware::RealTekFirmwareLoader;
 use bluefang::hci::connection::ConnectionManagerBuilder;
@@ -77,22 +77,16 @@ async fn main() -> anyhow::Result<()> {
                     in_use: Arc::new(AtomicBool::new(false)),
                     tsep: StreamEndpointType::Sink,
                     capabilities: vec![
-                        (ServiceCategory::MediaTransport, Bytes::new()),
-                        (ServiceCategory::MediaCodec, {
-                            let mut codec = BytesMut::new();
-                            codec.write_be(&((MediaType::Audio as u8) << 4));
-                            codec.write_be(&AudioCodec::Sbc);
-                            codec.write_be(&SbcMediaCodecInformationRaw {
-                                sampling_frequency: u8::MAX,
-                                channel_mode: u8::MAX,
-                                block_length: u8::MAX,
-                                subbands: u8::MAX,
-                                allocation_method: u8::MAX,
-                                minimum_bitpool: 2,
-                                maximum_bitpool: 53,
-                            });
-                            codec.freeze()
-                        }),
+                        Capability::MediaTransport,
+                        Capability::MediaCodec(SbcMediaCodecInformationRaw {
+                            sampling_frequency: 0b1111,
+                            channel_mode: 0b1111,
+                            block_length: 0b1111,
+                            subbands: 0b11,
+                            allocation_method: 0b11,
+                            minimum_bitpool: 2,
+                            maximum_bitpool: 53,
+                        }.into())
                     ],
                     //stream_handler_factory: Box::new(|cap| Box::new(FileDumpHandler::new())),
                     stream_handler_factory: Box::new(|cap| Box::new(SbcStreamHandler::new(cap))),
@@ -119,7 +113,7 @@ struct SbcStreamHandler {
 
 impl SbcStreamHandler {
 
-    pub fn new(capabilities: &[(ServiceCategory, Bytes)]) -> Self {
+    pub fn new(capabilities: &[Capability]) -> Self {
         Self {
             audio_session: AudioSession::new().unwrap(),
             decoder: Decoder::new(Vec::new()),
@@ -141,7 +135,7 @@ impl SbcStreamHandler {
 }
 
 impl StreamHandler for SbcStreamHandler {
-    fn on_reconfigure(&mut self, capabilities: &[(ServiceCategory, Bytes)]) {
+    fn on_reconfigure(&mut self, capabilities: &[Capability]) {
         todo!()
     }
 

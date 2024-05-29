@@ -1,4 +1,4 @@
-use instructor::{Exstruct, Instruct};
+use instructor::{ByteSize, Exstruct, Instruct};
 use instructor::utils::u24;
 
 // ([A2DP] Section 4.3.2).
@@ -19,6 +19,13 @@ pub struct SbcMediaCodecInformationRaw {
     pub allocation_method: u8,
     pub minimum_bitpool: u8,
     pub maximum_bitpool: u8,
+}
+
+//TODO Replace with derive
+impl ByteSize for SbcMediaCodecInformationRaw {
+    fn byte_size(&self) -> usize {
+        4
+    }
 }
 
 // ([A2DP] Section 4.5.2).

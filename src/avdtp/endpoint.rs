@@ -5,20 +5,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 use bytes::Bytes;
 use tracing::warn;
+use crate::avdtp::capabilities::Capability;
 use crate::avdtp::error::ErrorCode;
-use crate::avdtp::packets::{MediaType, ServiceCategory, StreamEndpoint, StreamEndpointType};
+use crate::avdtp::packets::{MediaType, StreamEndpoint, StreamEndpointType};
 use crate::ensure;
 use crate::l2cap::channel::Channel;
 use crate::l2cap::ChannelEvent;
 
-pub type StreamHandlerFactory = Box<dyn Fn(&[(ServiceCategory, Bytes)]) -> Box<dyn StreamHandler> + Send + Sync + 'static>;
+pub type StreamHandlerFactory = Box<dyn Fn(&[Capability]) -> Box<dyn StreamHandler> + Send + Sync + 'static>;
 
 pub struct LocalEndpoint {
     pub media_type: MediaType,
     pub seid: u8,
     pub in_use: Arc<AtomicBool>,
     pub tsep: StreamEndpointType,
-    pub capabilities: Vec<(ServiceCategory, Bytes)>,
+    pub capabilities: Vec<Capability>,
     pub stream_handler_factory: StreamHandlerFactory,
 }
 
@@ -48,13 +49,13 @@ pub struct Stream {
     endpoint_usage_lock: Arc<AtomicBool>,
     pub local_endpoint: u8,
     pub remote_endpoint: u8,
-    pub capabilities: Vec<(ServiceCategory, Bytes)>,
+    pub capabilities: Vec<Capability>,
     channel: Option<Channel>,
     handler: Box<dyn StreamHandler>
 }
 
 impl Stream {
-    pub fn new(local_endpoint: &LocalEndpoint, remote_endpoint: u8, capabilities: Vec<(ServiceCategory, Bytes)>) -> Result<Self, ErrorCode> {
+    pub fn new(local_endpoint: &LocalEndpoint, remote_endpoint: u8, capabilities: Vec<Capability>) -> Result<Self, ErrorCode> {
         ensure!(!local_endpoint.in_use.swap(true, Ordering::SeqCst), ErrorCode::SepInUse);
         let handler = (local_endpoint.stream_handler_factory)(&capabilities);
         Ok(Self {
@@ -154,7 +155,7 @@ impl Future for Stream {
 }
 
 pub trait StreamHandler: 'static {
-    fn on_reconfigure(&mut self, capabilities: &[(ServiceCategory, Bytes)]);
+    fn on_reconfigure(&mut self, capabilities: &[Capability]);
     fn on_play(&mut self);
     fn on_stop(&mut self);
 
