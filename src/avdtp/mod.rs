@@ -1,6 +1,7 @@
 pub mod packets;
 pub mod error;
 pub mod endpoint;
+pub mod utils;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -41,42 +42,7 @@ impl AvdtpServerBuilder {
         }
     }
 }
-/*
-impl Default for AvdtpServer {
-    fn default() -> Self {
-        Self {
-            pending_streams: Arc::new(Mutex::new(BTreeMap::new())),
-            local_endpoints: Arc::new([
-                LocalEndpoint {
-                    media_type: MediaType::Audio,
-                    seid: 1,
-                    in_use: Arc::new(AtomicBool::new(false)),
-                    tsep: StreamEndpointType::Sink,
-                    capabilities: vec![
-                        (ServiceCategory::MediaTransport, Bytes::new()),
-                        (ServiceCategory::MediaCodec, {
-                            let mut codec = BytesMut::new();
-                            codec.write_be(&((MediaType::Audio as u8) << 4));
-                            codec.write_be(&AudioCodec::Sbc);
-                            codec.write_be(&SbcMediaCodecInformationRaw {
-                                sampling_frequency: u8::MAX,
-                                channel_mode: u8::MAX,
-                                block_length: u8::MAX,
-                                subbands: u8::MAX,
-                                allocation_method: u8::MAX,
-                                minimum_bitpool: 2,
-                                maximum_bitpool: 53,
-                            });
-                            codec.freeze()
-                        }),
-                    ],
-                    stream_handler_factory: Box::new(|_| Box::new(DebugStreamHandler)),
-                }
-            ]),
-        }
-    }
-}
-*/
+
 pub struct AvdtpServer {
     pending_streams: Arc<Mutex<BTreeMap<u16, Arc<MutexCell<Option<Sender<Channel>>>>>>>,
     local_endpoints: Arc<[LocalEndpoint]>,
