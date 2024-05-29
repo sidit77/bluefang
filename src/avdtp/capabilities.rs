@@ -1,7 +1,7 @@
 use instructor::{BigEndian, Buffer, BufferMut, ByteSize, Error, Exstruct, Instruct};
 use instructor::utils::Limit;
+use crate::a2dp::sbc::SbcMediaCodecInformation;
 
-use crate::a2dp::SbcMediaCodecInformationRaw;
 use crate::avdtp::packets::{AudioCodec, MediaType, ServiceCategory, VideoCodec};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,12 +20,12 @@ pub enum MediaCodec {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MediaCodecCapability {
-    Sbc(SbcMediaCodecInformationRaw),
+    Sbc(SbcMediaCodecInformation),
     Generic(MediaCodec, Vec<u8>)
 }
 
-impl From<SbcMediaCodecInformationRaw> for MediaCodecCapability {
-    fn from(value: SbcMediaCodecInformationRaw) -> Self {
+impl From<SbcMediaCodecInformation> for MediaCodecCapability {
+    fn from(value: SbcMediaCodecInformation) -> Self {
         Self::Sbc(value)
     }
 }
@@ -146,8 +146,8 @@ struct MediaTypeRaw (
 mod test {
     use bytes::{Buf, BytesMut};
     use instructor::{Buffer, BufferMut};
+    use crate::a2dp::sbc::SbcMediaCodecInformation;
 
-    use crate::a2dp::SbcMediaCodecInformationRaw;
     use crate::avdtp::capabilities::{Capability, MediaCodecCapability};
 
     #[test]
@@ -155,15 +155,7 @@ mod test {
         let packet_bytes: &[u8] = &[0x01, 0x00, 0x07, 0x06, 0x00, 0x00, 0xff, 0xff,  0x02, 0x35];
         let capabilites = vec![
             Capability::MediaTransport,
-            Capability::MediaCodec(MediaCodecCapability::Sbc(SbcMediaCodecInformationRaw {
-                sampling_frequency: 0b1111,
-                channel_mode: 0b1111,
-                block_length: 0b1111,
-                subbands: 0b11,
-                allocation_method: 0b11,
-                minimum_bitpool: 2,
-                maximum_bitpool: 53,
-            }))
+            Capability::MediaCodec(MediaCodecCapability::Sbc(SbcMediaCodecInformation::default()))
         ];
         let mut buf = BytesMut::new();
         buf.write(&capabilites);

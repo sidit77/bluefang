@@ -170,7 +170,7 @@ impl State {
     }
 
     fn handle_data(&mut self, mut data: Bytes) -> Result<(), Error> {
-        trace!("Received {} bytes of ACL data", data.len());
+        //trace!("Received {} bytes of ACL data", data.len());
         let header: AclHeader = data.read()?;
         if let Some(pdu) = self.get_connection(header.handle)?.assembler.push(header, data) {
             self.handle_l2cap_packet(header.handle, pdu)?;

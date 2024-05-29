@@ -12,7 +12,6 @@ use parking_lot::Mutex;
 use tokio::{select, spawn};
 use tokio::runtime::Handle;
 use tokio::sync::oneshot::{Receiver, Sender};
-use tokio::task::spawn_blocking;
 use tracing::{debug, info, trace, warn};
 use crate::avdtp::endpoint::Stream;
 use crate::avdtp::error::ErrorCode;
@@ -64,8 +63,9 @@ impl Server for AvdtpServer {
 
                 let local_endpoints = self.local_endpoints.clone();
 
+                // Use an OS thread instead a tokio task to avoid blocking the runtime with audio processing
                 let runtime = Handle::current();
-                spawn_blocking(move || runtime.block_on(async move {
+                std::thread::spawn(move || runtime.block_on(async move {
                     if let Err(err) = channel.configure().await {
                         warn!("Error configuring channel: {:?}", err);
                         return;
