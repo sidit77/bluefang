@@ -35,6 +35,7 @@ impl Default for SbcMediaCodecInformation {
     }
 }
 
+// ([A2DP] Section 4.3.2.1).
 bitflags! {
     #[derive(Debug, Copy, Clone, Eq, PartialEq, Instruct, Exstruct)]
     #[instructor(bitflags)]
@@ -58,6 +59,7 @@ impl SamplingFrequencies {
     }
 }
 
+// ([A2DP] Section 4.3.2.2).
 bitflags! {
     #[derive(Debug, Copy, Clone, Eq, PartialEq, Instruct, Exstruct)]
     #[instructor(bitflags)]
@@ -69,6 +71,7 @@ bitflags! {
     }
 }
 
+// ([A2DP] Section 4.3.2.3).
 bitflags! {
     #[derive(Debug, Copy, Clone, Eq, PartialEq, Instruct, Exstruct)]
     #[instructor(bitflags)]
@@ -92,6 +95,7 @@ impl BlockLengths {
     }
 }
 
+// ([A2DP] Section 4.3.2.4).
 bitflags! {
     #[derive(Debug, Copy, Clone, Eq, PartialEq, Instruct, Exstruct)]
     #[instructor(bitflags)]
@@ -111,6 +115,7 @@ impl Subbands {
     }
 }
 
+// ([A2DP] Section 4.3.2.5).
 bitflags! {
     #[derive(Debug, Copy, Clone, Eq, PartialEq, Instruct, Exstruct)]
     #[instructor(bitflags)]

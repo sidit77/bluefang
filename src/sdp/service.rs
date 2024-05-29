@@ -73,9 +73,8 @@ impl AsRef<[ServiceAttribute]> for Service {
     }
 }
 
-impl FromIterator<ServiceAttribute> for Service {
-    fn from_iter<T: IntoIterator<Item=ServiceAttribute>>(iter: T) -> Self {
-        let mut attributes = iter.into_iter().collect::<Vec<_>>();
+impl From<Vec<ServiceAttribute>> for Service {
+    fn from(mut attributes: Vec<ServiceAttribute>) -> Self {
         attributes.sort_by_key(|a| a.id);
         Self {
             attributes: Arc::new(attributes)

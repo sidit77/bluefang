@@ -1,6 +1,7 @@
 mod data_element;
 mod error;
 mod service;
+pub mod ids;
 
 use std::collections::BTreeMap;
 use std::mem::size_of;
@@ -13,84 +14,41 @@ use tokio::spawn;
 use tracing::{error, trace, warn};
 use crate::{ensure, hci};
 use crate::l2cap::channel::Channel;
-use crate::l2cap::{AVDTP_PSM, Server};
+use crate::l2cap::Server;
 use crate::sdp::error::{Error, SdpErrorCodes};
-use crate::sdp::service::{Service, ServiceAttribute};
+use crate::sdp::service::{Service};
 
 pub use data_element::{DataElement, Uuid};
+pub use service::ServiceAttribute;
 
-/*
-#[derive(Default, Clone)]
+pub trait ServiceRecord {
+    fn handle(&self) -> u32;
+    fn attributes(&self) -> Vec<ServiceAttribute>;
+}
+
+#[derive(Default)]
 pub struct SdpServerBuilder {
-    records: BTreeMap<Uuid, BTreeMap<u16, DataElement>>
+    records: BTreeMap<u32, Service>
 }
 
 impl SdpServerBuilder {
-    pub fn add_records(mut self, service: impl Into<Uuid>, records: impl IntoIterator<Item=(u16, DataElement)>) -> Self {
-        self
-            .records
-            .entry(service.into())
-            .or_default()
-            .extend(records.into_iter().map(|(id, value)| (id, value.into())));
+
+    pub fn with_record<T: ServiceRecord>(mut self, record: T) -> Self {
+        assert!(!(0x00000001..=0x0000FFFF).contains(&record.handle()), "Reserved service record handle");
+        assert!(!self.records.contains_key(&record.handle()), "Duplicate service record handle");
+        self.records.insert(record.handle(), Service::from(record.attributes()));
         self
     }
 
     pub fn build(self) -> SdpServer {
-        SdpServer {
-            records: Arc::new(self.records)
-        }
+        SdpServer { records: Arc::new(self.records) }
     }
+
 }
-*/
-
-
 
 #[derive(Clone)]
 pub struct SdpServer {
     records: Arc<BTreeMap<u32, Service>>
-}
-
-const SDP_SERVICE_RECORD_HANDLE_ATTRIBUTE_ID: u16 = 0x0000;
-const SDP_SERVICE_CLASS_ID_LIST_ATTRIBUTE_ID: u16 = 0x0001;
-const SDP_PROTOCOL_DESCRIPTOR_LIST_ATTRIBUTE_ID: u16 = 0x0004;
-const SDP_BROWSE_GROUP_LIST_ATTRIBUTE_ID: u16 = 0x0005;
-const SDP_BLUETOOTH_PROFILE_DESCRIPTOR_LIST_ATTRIBUTE_ID: u16 = 0x0009;
-
-
-const SDP_PUBLIC_BROWSE_ROOT: Uuid = Uuid::from_u16(0x1002);
-const BT_AUDIO_SINK_SERVICE: Uuid = Uuid::from_u16(0x110b);
-const BT_L2CAP_PROTOCOL_ID: Uuid = Uuid::from_u16(0x0100);
-const BT_AVDTP_PROTOCOL_ID: Uuid = Uuid::from_u16(0x0019);
-const BT_ADVANCED_AUDIO_DISTRIBUTION_SERVICE: Uuid = Uuid::from_u16(0x110d);
-
-impl Default for SdpServer {
-    fn default() -> Self {
-        //SdpServerBuilder::default()
-        //    .add_records(PNP_INFORMATION, [])
-        //    .build()
-        let service_record_handle = 0x00010001;
-        let version = 1u16 << 8 | 3u16;
-        SdpServer {
-            records: Arc::new(BTreeMap::from_iter([
-                (service_record_handle, Service::from_iter([
-                    ServiceAttribute::new(SDP_SERVICE_RECORD_HANDLE_ATTRIBUTE_ID, service_record_handle),
-                    ServiceAttribute::new(SDP_BROWSE_GROUP_LIST_ATTRIBUTE_ID, DataElement::from_iter([
-                        SDP_PUBLIC_BROWSE_ROOT,
-                    ])),
-                    ServiceAttribute::new(SDP_SERVICE_CLASS_ID_LIST_ATTRIBUTE_ID, DataElement::from_iter([
-                        BT_AUDIO_SINK_SERVICE,
-                    ])),
-                    ServiceAttribute::new(SDP_PROTOCOL_DESCRIPTOR_LIST_ATTRIBUTE_ID, DataElement::from_iter([
-                        (BT_L2CAP_PROTOCOL_ID, AVDTP_PSM),
-                        (BT_AVDTP_PROTOCOL_ID, version)
-                    ])),
-                    ServiceAttribute::new(SDP_BLUETOOTH_PROFILE_DESCRIPTOR_LIST_ATTRIBUTE_ID, DataElement::from_iter([
-                        (BT_ADVANCED_AUDIO_DISTRIBUTION_SERVICE, version)
-                    ])),
-                ]))
-            ])),
-        }
-    }
 }
 
 impl Server for SdpServer {
