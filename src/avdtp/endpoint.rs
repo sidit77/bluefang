@@ -1,11 +1,11 @@
 use std::future::Future;
+use std::io::Write;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 use bytes::Bytes;
-use parking_lot::Mutex;
-use tracing::debug;
+use tracing::{debug, warn};
 use crate::avdtp::error::ErrorCode;
 use crate::avdtp::packets::{MediaType, ServiceCategory, StreamEndpoint, StreamEndpointType};
 use crate::ensure;
@@ -34,6 +34,7 @@ impl LocalEndpoint {
     }
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 enum StreamState {
     Configured,
     Opening,
@@ -50,7 +51,7 @@ pub struct Stream {
     pub remote_endpoint: u8,
     pub capabilities: Vec<(ServiceCategory, Bytes)>,
     channel: Option<Channel>,
-    handler: Mutex<Box<dyn StreamHandler>>
+    handler: Box<dyn StreamHandler>
 }
 
 impl Stream {
@@ -63,15 +64,40 @@ impl Stream {
             state: StreamState::Configured,
             capabilities,
             channel: None,
-            handler: Mutex::new(handler),
+            handler,
             endpoint_usage_lock: local_endpoint.in_use.clone(),
         })
     }
 
-    pub fn set_to_opening(&mut self) {
-        assert!(matches!(self.state, StreamState::Configured));
-        assert!(self.channel.is_none());
+    pub fn set_to_opening(&mut self) -> Result<(), ErrorCode> {
+        ensure!(matches!(self.state, StreamState::Configured), ErrorCode::BadState);
+        ensure!(self.channel.is_none(), ErrorCode::BadState);
         self.state = StreamState::Opening;
+        Ok(())
+    }
+
+    pub fn start(&mut self) -> Result<(), ErrorCode> {
+        ensure!(matches!(self.state, StreamState::Open), ErrorCode::BadState);
+        self.handler.on_play();
+        self.state = StreamState::Streaming;
+        Ok(())
+    }
+
+    pub fn stop(&mut self) -> Result<(), ErrorCode> {
+        ensure!(matches!(self.state, StreamState::Streaming), ErrorCode::BadState);
+        self.handler.on_stop();
+        self.state = StreamState::Open;
+        Ok(())
+    }
+
+    pub fn close(&mut self) -> Result<(), ErrorCode> {
+        ensure!(matches!(self.state, StreamState::Streaming | StreamState::Open), ErrorCode::BadState);
+        if self.state == StreamState::Streaming {
+            self.handler.on_stop();
+        }
+        self.state = StreamState::Closing;
+        self.channel = None;
+        Ok(())
     }
 
     pub fn is_opening(&self) -> bool {
@@ -97,32 +123,38 @@ impl Future for Stream {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.channel.as_mut() {
-            Some(channel) => {
-                match channel.receiver.poll_recv(cx) {
-                    Poll::Ready(Some(e)) => {
-                        if let ChannelEvent::DataReceived(data) = e {
-                            let mut handler = self.handler.lock();
-                            handler.on_data(data);
-                        }
-                        Poll::Pending
-                    },
-                    Poll::Ready(None) => {
-                        self.state = StreamState::Closing;
-                        Poll::Ready(())
-                    },
-                    Poll::Pending => Poll::Pending,
+        loop {
+            match self.channel.as_mut() {
+                Some(channel) => {
+                    match channel.receiver.poll_recv(cx) {
+                        Poll::Ready(Some(ChannelEvent::DataReceived(data))) => {
+                            if self.state == StreamState::Streaming {
+                                self.handler.on_data(data.slice(12..));
+                            } else {
+                                warn!("Data received while not streaming");
+                            }
+                        },
+                        Poll::Ready(Some(_)) => {
+                            warn!("Non data packets in configured state");
+                        },
+                        Poll::Ready(None) => {
+                            self.state = StreamState::Closing;
+                            self.channel = None;
+                            return Poll::Ready(())
+                        },
+                        Poll::Pending => return Poll::Pending,
+                    }
                 }
+                None => return match self.state {
+                    StreamState::Closing => Poll::Ready(()),
+                    _ => Poll::Pending,
+                },
             }
-            None => match self.state {
-                StreamState::Closing => Poll::Ready(()),
-                _ => Poll::Pending,
-            },
         }
     }
 }
 
-pub trait StreamHandler: Send + 'static {
+pub trait StreamHandler: 'static {
     fn on_reconfigure(&mut self, capabilities: &[(ServiceCategory, Bytes)]);
     fn on_play(&mut self);
     fn on_stop(&mut self);
@@ -148,5 +180,40 @@ impl StreamHandler for DebugStreamHandler {
 
     fn on_data(&mut self, data: Bytes) {
         debug!("Data: {} bytes", data.len());
+    }
+}
+
+pub struct FileDumpHandler {
+    file: std::fs::File,
+    total: usize
+}
+
+impl FileDumpHandler {
+    pub fn new() -> Self {
+        Self {
+            file: std::fs::File::create("output.sbc").unwrap(),
+            total: 0,
+        }
+    }
+}
+
+impl StreamHandler for FileDumpHandler {
+    fn on_reconfigure(&mut self, _capabilities: &[(ServiceCategory, Bytes)]) {
+
+    }
+
+    fn on_play(&mut self) {
+
+    }
+
+    fn on_stop(&mut self) {
+
+    }
+
+    fn on_data(&mut self, data: Bytes) {
+        let data = &data.as_ref()[1..];
+        self.file.write_all(data).unwrap();
+        self.total += data.len();
+        println!("total: {}", self.total);
     }
 }

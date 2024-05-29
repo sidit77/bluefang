@@ -182,7 +182,7 @@ impl State {
     fn handle_l2cap_packet(&mut self, handle: u16, mut data: Bytes) -> Result<(), Error> {
         let L2capHeader { cid, ..} = data.read()?;
 
-        debug!("    L2CAP header: cid={:04X}", cid);
+        //debug!("    L2CAP header: cid={:04X}", cid);
         // ([Vol 3] Part A, Section 2.1).
         match cid {
             CID_ID_NONE => Err(Error::BadPacket(instructor::Error::InvalidValue)),

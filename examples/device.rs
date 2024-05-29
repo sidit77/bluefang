@@ -1,31 +1,31 @@
 use std::array::from_fn;
 use std::collections::VecDeque;
-use std::io::Read;
-use std::iter::zip;
+use std::iter::{repeat, zip};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool};
 use std::time::Duration;
 
 use anyhow::Context;
 use bytes::{Bytes, BytesMut};
-use cpal::{default_host, Device, SampleFormat, Stream, StreamConfig};
+use cpal::{default_host, SampleFormat, Stream};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use instructor::BufferMut;
-use ringbuf::{CachingCons, CachingProd, HeapProd, HeapRb, SharedRb};
+use ringbuf::{HeapProd, HeapRb};
 use ringbuf::consumer::Consumer;
 use ringbuf::producer::Producer;
 use ringbuf::traits::{Observer, Split};
 use rubato::{FftFixedIn, Resampler};
 use sbc_rs::Decoder;
-use tokio::time::Instant;
-use tracing::info;
+use tokio::signal::ctrl_c;
+use tokio::time::{Instant};
+use tracing::{error, info, trace};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use bluefang::a2dp::SbcMediaCodecInformationRaw;
-use bluefang::avdtp::{AvdtpServer, MediaDecoder, MediaSink};
-use bluefang::avdtp::packets::{AudioCodec, MediaType, ServiceCategory};
+use bluefang::avdtp::{AvdtpServerBuilder, LocalEndpoint, StreamHandler};
+use bluefang::avdtp::packets::{AudioCodec, MediaType, ServiceCategory, StreamEndpointType};
 
 use bluefang::firmware::RealTekFirmwareLoader;
 use bluefang::hci::connection::ConnectionManagerBuilder;
@@ -43,7 +43,7 @@ async fn main() -> anyhow::Result<()> {
         .with(EnvFilter::from_default_env())
         .init();
 
-    //return play_saved_audio().await;
+    //return play_saved_audio2().await;
 
     Hci::register_firmware_loader(RealTekFirmwareLoader::new());
 
@@ -70,7 +70,34 @@ async fn main() -> anyhow::Result<()> {
             .await?;
         let _l2cap_server = L2capServerBuilder::default()
             .with_server(SDP_PSM, SdpServer::default())
-            .with_server(AVDTP_PSM, AvdtpServer::default())
+            .with_server(AVDTP_PSM, AvdtpServerBuilder::default()
+                .with_endpoint(LocalEndpoint {
+                    media_type: MediaType::Audio,
+                    seid: 1,
+                    in_use: Arc::new(AtomicBool::new(false)),
+                    tsep: StreamEndpointType::Sink,
+                    capabilities: vec![
+                        (ServiceCategory::MediaTransport, Bytes::new()),
+                        (ServiceCategory::MediaCodec, {
+                            let mut codec = BytesMut::new();
+                            codec.write_be(&((MediaType::Audio as u8) << 4));
+                            codec.write_be(&AudioCodec::Sbc);
+                            codec.write_be(&SbcMediaCodecInformationRaw {
+                                sampling_frequency: u8::MAX,
+                                channel_mode: u8::MAX,
+                                block_length: u8::MAX,
+                                subbands: u8::MAX,
+                                allocation_method: u8::MAX,
+                                minimum_bitpool: 2,
+                                maximum_bitpool: 53,
+                            });
+                            codec.freeze()
+                        }),
+                    ],
+                    //stream_handler_factory: Box::new(|cap| Box::new(FileDumpHandler::new())),
+                    stream_handler_factory: Box::new(|cap| Box::new(SbcStreamHandler::new(cap))),
+                })
+                .build())
             .spawn(host.clone())?;
 
         host.write_local_name("redtest").await?;
@@ -82,6 +109,126 @@ async fn main() -> anyhow::Result<()> {
     host.shutdown().await?;
     Ok(())
 
+}
+
+
+struct SbcStreamHandler {
+    audio_session: AudioSession,
+    decoder: Decoder,
+}
+
+impl SbcStreamHandler {
+
+    pub fn new(capabilities: &[(ServiceCategory, Bytes)]) -> Self {
+        Self {
+            audio_session: AudioSession::new().unwrap(),
+            decoder: Decoder::new(Vec::new()),
+        }
+    }
+
+    fn process_frames(&mut self, data: &[u8]) {
+        println!("buffer: {}", self.audio_session.writer().occupied_len());
+        self.decoder.refill_buffer(data);
+        while let Some(sample) = self.decoder.next_frame() {
+            self.audio_session.writer().push_slice(&sample);
+        }
+    }
+
+    fn pad_stream(&mut self, len: usize) {
+        self.audio_session.writer().push_iter(repeat(0).take(len));
+    }
+
+}
+
+impl StreamHandler for SbcStreamHandler {
+    fn on_reconfigure(&mut self, capabilities: &[(ServiceCategory, Bytes)]) {
+        todo!()
+    }
+
+    fn on_play(&mut self) {
+        self.audio_session.play();
+    }
+
+    fn on_stop(&mut self) {
+        self.audio_session.stop();
+    }
+
+    fn on_data(&mut self, data: Bytes) {
+        self.process_frames(&data.as_ref()[1..]);
+    }
+}
+
+pub struct AudioSession {
+    stream: Stream,
+    buffer: HeapProd<i16>,
+}
+
+impl AudioSession {
+    pub fn new() -> anyhow::Result<Self> {
+        let host = default_host();
+        let device = host
+            .default_output_device()
+            .context("failed to find output device")?;
+
+        let config = device.supported_output_configs()?
+            .inspect(|config| trace!("supported output config: {:?}", config))
+            .find(|config| config.sample_format() == SampleFormat::I16 && config.channels() == 2)
+            .context("failed to find output config")?
+            .with_max_sample_rate()
+            .config();
+        trace!("selected output config: {:?}", config);
+
+        let buffer: Arc<HeapRb<i16>> = Arc::new(HeapRb::new(100_000_000));
+        let (buffer, mut consumer) = buffer.split();
+
+        let stream = device.build_output_stream(
+            &config,
+            move |data: &mut [i16], _info| {
+                let len = consumer.pop_slice(data);
+                //data[..len].iter_mut().for_each(|d| *d *=  8);
+                data[len..].fill(0);
+            },
+            move |err| {
+                error!("an error occurred on the output stream: {}", err);
+            },
+            None,
+        )?;
+
+        Ok(Self {
+            stream,
+            buffer,
+        })
+    }
+
+    pub fn play(&self) {
+        self.stream.play().unwrap();
+    }
+
+    pub fn stop(&self) {
+        self.stream.pause().unwrap();
+    }
+
+    pub fn writer(&mut self) -> &mut HeapProd<i16> {
+        &mut self.buffer
+    }
+
+}
+
+#[allow(dead_code)]
+async fn play_saved_audio2() -> anyhow::Result<()> {
+    let mut session = SbcStreamHandler::new(&[]);
+    let mut file = Bytes::from(std::fs::read("output.sbc")?);
+
+
+    session.on_play();
+    session.pad_stream(512);
+    while !file.is_empty() {
+        session.process_frames(&file.split_to(8 * 119));
+        std::thread::sleep(std::time::Duration::from_millis(21));
+    }
+
+    ctrl_c().await?;
+    Ok(())
 }
 
 #[allow(dead_code)]
@@ -100,7 +247,7 @@ async fn play_saved_audio() -> anyhow::Result<()> {
         .config();
     println!("output config: {:?}", config);
 
-    let file = std::fs::read("./target/test.sbc")?;
+    let file = std::fs::read("output.sbc")?;
     let mut decoder = Decoder::new(file);
     //let mut source = iter::from_fn(move || decoder.next_frame().map(|s| s.to_vec()))
     //    .flat_map(|frame| frame.into_iter())
@@ -169,14 +316,15 @@ async fn play_saved_audio() -> anyhow::Result<()> {
             queue.push_back((r * 8.0) as i16);
         }
         queue_time += temp_time.elapsed();
+        println!("max: {}", sample[0].iter().max().unwrap())
     }
     let total_time = start_time.elapsed();
 
     println!("done processing samples ({}ms):\n\tdecode: {}%\n\tresample: {}%\n\tqueues: {}%",
-        total_time.as_secs_f64() * 1000.0,
-        (decode_time.as_secs_f64() / total_time.as_secs_f64() * 100.0).round(),
-        (resample_time.as_secs_f64() / total_time.as_secs_f64() * 100.0).round(),
-        (queue_time.as_secs_f64() / total_time.as_secs_f64() * 100.0).round()
+             total_time.as_secs_f64() * 1000.0,
+             (decode_time.as_secs_f64() / total_time.as_secs_f64() * 100.0).round(),
+             (resample_time.as_secs_f64() / total_time.as_secs_f64() * 100.0).round(),
+             (queue_time.as_secs_f64() / total_time.as_secs_f64() * 100.0).round()
     );
 
     let stream = device.build_output_stream(
@@ -197,6 +345,7 @@ async fn play_saved_audio() -> anyhow::Result<()> {
 
     Ok(())
 }
+
 /*
 struct SbcAudioSink {
     config: StreamConfig,

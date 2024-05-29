@@ -1,52 +1,47 @@
 pub mod packets;
-mod error;
-mod endpoint;
+pub mod error;
+pub mod endpoint;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool};
 use bytes::{BufMut, Bytes, BytesMut};
 use instructor::{Buffer, BufferMut};
 use parking_lot::Mutex;
 use tokio::{select, spawn};
+use tokio::runtime::Handle;
 use tokio::sync::oneshot::{Receiver, Sender};
+use tokio::task::spawn_blocking;
 use tracing::{debug, info, trace, warn};
-use crate::a2dp::SbcMediaCodecInformationRaw;
-use crate::avdtp::endpoint::{DebugStreamHandler, LocalEndpoint, Stream};
+use crate::avdtp::endpoint::Stream;
 use crate::avdtp::error::ErrorCode;
-use crate::avdtp::packets::{AudioCodec, MediaType, MessageType, ServiceCategory, SignalChannelExt, SignalIdentifier, SignalMessage, SignalMessageAssembler, StreamEndpointType};
+use crate::avdtp::packets::{MessageType, ServiceCategory, SignalChannelExt, SignalIdentifier, SignalMessage, SignalMessageAssembler};
 use crate::hci::Error;
 use crate::l2cap::channel::Channel;
 use crate::l2cap::Server;
 use crate::utils::{MutexCell, select_all, stall_if_none};
 
-pub trait MediaDecoder: Send + 'static {
-    fn decode(&mut self, data: Bytes);
-}
+pub use endpoint::{StreamHandler, LocalEndpoint};
 
-pub trait MediaSink: Send + 'static {
-    fn media_type(&self) -> MediaType;
-    fn capabilities(&self) -> &[(ServiceCategory, Bytes)];
-
-    fn in_use(&self) -> bool;
-    fn start(&self);
-    fn stop(&self);
-
-    fn decoder(&self) -> Box<dyn MediaDecoder>;
-}
-
-
-
-struct OldSink {
-    id: u8,
-    media_type: MediaType,
-    capabilities: Vec<(ServiceCategory, Bytes)>
-}
-
+#[derive(Default)]
 pub struct AvdtpServerBuilder {
-    sinks: Vec<Box<dyn MediaSink>>
+    endpoints: Vec<LocalEndpoint>,
 }
 
+impl AvdtpServerBuilder {
+
+    pub fn with_endpoint(mut self, endpoint: LocalEndpoint) -> Self {
+        self.endpoints.push(endpoint);
+        self
+    }
+
+    pub fn build(self) -> AvdtpServer {
+        AvdtpServer {
+            pending_streams: Arc::new(Mutex::new(BTreeMap::new())),
+            local_endpoints: self.endpoints.into(),
+        }
+    }
+}
+/*
 impl Default for AvdtpServer {
     fn default() -> Self {
         Self {
@@ -81,7 +76,7 @@ impl Default for AvdtpServer {
         }
     }
 }
-
+*/
 pub struct AvdtpServer {
     pending_streams: Arc<Mutex<BTreeMap<u16, Arc<MutexCell<Option<Sender<Channel>>>>>>>,
     local_endpoints: Arc<[LocalEndpoint]>,
@@ -97,25 +92,27 @@ impl Server for AvdtpServer {
                 let pending_streams = self.pending_streams.clone();
                 let pending_stream = Arc::new(MutexCell::new(None));
                 pending_streams.lock().insert(handle, pending_stream.clone());
-                let mut session = AvdtpSession {
-                    channel_sender: pending_stream,
-                    channel_receiver: None,
-                    local_endpoints: self.local_endpoints.clone(),
-                    streams: Vec::new(),
-                };
 
+                let local_endpoints = self.local_endpoints.clone();
 
-                spawn(async move {
+                let runtime = Handle::current();
+                spawn_blocking(move || runtime.block_on(async move {
                     if let Err(err) = channel.configure().await {
                         warn!("Error configuring channel: {:?}", err);
                         return;
                     }
+                    let mut session = AvdtpSession {
+                        channel_sender: pending_stream,
+                        channel_receiver: None,
+                        local_endpoints,
+                        streams: Vec::new(),
+                    };
                     session.handle_control_channel(channel).await.unwrap_or_else(|err| {
                         warn!("Error handling control channel: {:?}", err);
                     });
                     trace!("AVDTP signaling session ended for 0x{:04x}", handle);
                     pending_streams.lock().remove(&handle);
-                });
+                }));
             }
             Some(pending) => {
                 trace!("Existing AVDTP session (transport channel)");
@@ -148,6 +145,10 @@ impl AvdtpSession {
         let mut assembler = SignalMessageAssembler::default();
         loop {
             select! {
+                (i, _) = select_all(&mut self.streams) => {
+                    debug!("Stream {} ended", i);
+                    self.streams.swap_remove(i);
+                },
                 signal = channel.read() => match signal {
                     Some(packet) => match assembler.process_msg(packet) {
                         Ok(Some(header)) => {
@@ -170,10 +171,6 @@ impl AvdtpSession {
                         .map(|stream| stream.set_channel(channel))
                         .unwrap_or_else(|| warn!("No stream waiting for channel"));
                     self.channel_receiver = None;
-                },
-                (i, _) = select_all(&mut self.streams) => {
-                    debug!("Stream {} ended", i);
-                    self.streams.swap_remove(i);
                 }
             }
         }
@@ -242,7 +239,7 @@ impl AvdtpSession {
                     .find(|stream| stream.local_endpoint == seid)
                     .ok_or(ErrorCode::BadAcpSeid)?;
                 //info!("OPEN (0x{:02x}): {:?}", seid, sink.media_type);
-                stream.set_to_opening();
+                stream.set_to_opening()?;
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 self.channel_sender.set(Some(tx));
                 self.channel_receiver = Some(rx);
@@ -254,10 +251,11 @@ impl AvdtpSession {
                 while {
                     let seid = data.read_be::<u8>()? >> 2;
                     data.finish()?;
-                    //let sink = self.sinks.iter()
-                    //    .find(|sink| sink.id == seid)
-                    //    .ok_or(ErrorCode::BadAcpSeid)?;
-                    //info!("START (0x{:02x}): {:?}", seid, sink.media_type);
+                    let sink = self.streams.iter_mut()
+                        .find(|stream| stream.local_endpoint == seid)
+                        .ok_or(ErrorCode::BadAcpSeid)?;
+                    info!("START {:?}", seid);
+                    sink.start()?;
                     !data.is_empty()
                 } {}
                 Ok(())
@@ -266,10 +264,11 @@ impl AvdtpSession {
             SignalIdentifier::Close => resp.try_accept(|_| {
                 let seid = data.read_be::<u8>()? >> 2;
                 data.finish()?;
-                //let sink = self.sinks.iter()
-                //.find(|sink| sink.id == seid)
-                //.ok_or(ErrorCode::BadAcpSeid)?;
-                //info!("CLOSE (0x{:02x}): {:?}", seid, sink.media_type);
+                let stream = self.streams.iter_mut()
+                    .find(|stream| stream.local_endpoint == seid)
+                    .ok_or(ErrorCode::BadAcpSeid)?;
+                stream.close()?;
+                info!("SUSPEND {:?}", seid);
                 Ok(())
             }),
             // ([AVDTP] Section 8.15).
@@ -278,10 +277,11 @@ impl AvdtpSession {
                 while {
                     let seid = data.read_be::<u8>()? >> 2;
                     data.finish()?;
-                    //let sink = self.sinks.iter()
-                    //    .find(|sink| sink.id == seid)
-                    //    .ok_or(ErrorCode::BadAcpSeid)?;
-                    //info!("SUSPEND (0x{:02x}): {:?}", seid, sink.media_type);
+                    let sink = self.streams.iter_mut()
+                        .find(|stream| stream.local_endpoint == seid)
+                        .ok_or(ErrorCode::BadAcpSeid)?;
+                    info!("SUSPEND {:?}", seid);
+                    sink.stop()?;
                     !data.is_empty()
                 } {}
                 Ok(())
