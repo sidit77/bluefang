@@ -20,6 +20,7 @@ use crate::hci::{AclSender, Error, Hci};
 use crate::l2cap::channel::Channel;
 
 pub const SDP_PSM: u16 = 0x0001;
+pub const AVCTP_PSM: u16 = 0x0017;
 pub const AVDTP_PSM: u16 = 0x0019;
 
 

@@ -32,7 +32,7 @@ pub mod attributes {
 
     // ([Vol 3] Part B, Section 5.1.11).
     pub const BLUETOOTH_PROFILE_DESCRIPTOR_LIST_ID: u16 = 0x0009;
-    
+
 }
 
 // ([Assigned Numbers] Section 3.1).
