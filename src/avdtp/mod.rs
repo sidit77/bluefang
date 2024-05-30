@@ -7,15 +7,15 @@ pub mod capabilities;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use bytes::{Bytes, BytesMut};
-use instructor::{Buffer, BufferMut};
+use instructor::{BigEndian, Buffer, BufferMut, Instruct};
 use parking_lot::Mutex;
 use tokio::{select, spawn};
 use tokio::runtime::Handle;
 use tokio::sync::oneshot::{Receiver, Sender};
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, trace, warn};
 use crate::avdtp::endpoint::Stream;
 use crate::avdtp::error::ErrorCode;
-use crate::avdtp::packets::{MessageType, SignalChannelExt, SignalIdentifier, SignalMessage, SignalMessageAssembler};
+use crate::avdtp::packets::{MessageType, ServiceCategory, SignalChannelExt, SignalIdentifier, SignalMessage, SignalMessageAssembler};
 use crate::hci::Error;
 use crate::l2cap::channel::Channel;
 use crate::l2cap::Server;
@@ -23,6 +23,7 @@ use crate::utils::{MutexCell, select_all, stall_if_none};
 
 pub use endpoint::{StreamHandler, LocalEndpoint};
 use crate::avdtp::capabilities::Capability;
+use crate::ensure;
 
 #[derive(Default)]
 pub struct AvdtpServerBuilder {
@@ -146,56 +147,98 @@ impl AvdtpSession {
         Ok(())
     }
 
+    fn get_endpoint(&self, seid: u8) -> Result<&LocalEndpoint, ErrorCode> {
+        self.local_endpoints.iter()
+            .find(|ep| ep.seid == seid)
+            .ok_or(ErrorCode::BadAcpSeid)
+    }
+
+    fn get_stream(&mut self, seid: u8) -> Result<&mut Stream, ErrorCode> {
+        self.streams.iter_mut()
+            .find(|stream| stream.local_endpoint == seid)
+            .ok_or_else(|| self.local_endpoints.iter()
+                .any(|ep| ep.seid == seid)
+                .then_some(ErrorCode::BadState)
+                .unwrap_or(ErrorCode::BadAcpSeid))
+    }
+
     fn handle_signal_message(&mut self, msg: SignalMessage) -> SignalMessage {
         assert_eq!(msg.message_type, MessageType::Command);
         let resp = SignalMessageResponse::for_msg(&msg);
         let mut data = msg.data;
         match msg.signal_identifier {
             // ([AVDTP] Section 8.6).
-            SignalIdentifier::Discover => resp.try_accept(|buf| {
+            SignalIdentifier::Discover => resp.try_accept((), |buf, _| {
                 data.finish()?;
+                trace!("Got DISCOVER request");
                 for endpoint in self.local_endpoints.iter() {
                     buf.write(&endpoint.as_stream_endpoint());
                 }
                 Ok(())
             }),
             // ([AVDTP] Section 8.7).
-            SignalIdentifier::GetCapabilities => resp.general_reject(),
-            // ([AVDTP] Section 8.8).
-            SignalIdentifier::GetAllCapabilities => resp.try_accept(|buf| {
+            SignalIdentifier::GetCapabilities => resp.try_accept((), |buf, _| {
                 let seid = data.read_be::<u8>()? >> 2;
                 data.finish()?;
-                let ep = self.local_endpoints.iter()
-                    .find(|ep| ep.seid == seid)
-                    .ok_or(ErrorCode::BadAcpSeid)?;
+                trace!("Got GET_CAPABILITIES request for 0x{:02x}", seid);
+                let ep = self.get_endpoint(seid)?;
+                ep.capabilities
+                    .iter()
+                    .filter(|cap| cap.is_basic())
+                    .for_each(|cap| buf.write(cap));
+                Ok(())
+            }),
+            // ([AVDTP] Section 8.8).
+            SignalIdentifier::GetAllCapabilities => resp.try_accept((), |buf, _| {
+                let seid = data.read_be::<u8>()? >> 2;
+                data.finish()?;
+                trace!("Got GET_ALL_CAPABILITIES request for 0x{:02x}", seid);
+                let ep = self.get_endpoint(seid)?;
                 buf.write(&ep.capabilities);
                 Ok(())
             }),
             // ([AVDTP] Section 8.9).
-            SignalIdentifier::SetConfiguration => resp.try_accept(|_| {
-                //TODO add the required parameters to a reject
+            SignalIdentifier::SetConfiguration => resp.try_accept(ServiceCategory::Unknown, |_, _| {
                 let acp_seid = data.read_be::<u8>()? >> 2;
                 let int_seid = data.read_be::<u8>()? >> 2;
                 let capabilities: Vec<Capability> = data.read_be()?;
                 data.finish()?;
-                let ep = self.local_endpoints.iter()
-                    .find(|ep| ep.seid == acp_seid)
-                    .ok_or(ErrorCode::BadAcpSeid)?;
+                trace!("Got SET_CONFIGURATION request for 0x{:02x} -> 0x{:02x}", acp_seid, int_seid);
+                let ep = self.get_endpoint(acp_seid)?;
+                ensure!(self.streams.iter().all(|stream| stream.local_endpoint != acp_seid), ErrorCode::BadState);
                 self.streams.push(Stream::new(ep, int_seid, capabilities)?);
                 Ok(())
             }),
             // ([AVDTP] Section 8.10).
-            SignalIdentifier::GetConfiguration => resp.general_reject(),
-            // ([AVDTP] Section 8.11).
-            SignalIdentifier::Reconfigure => resp.general_reject(),
-            // ([AVDTP] Section 8.12).
-            SignalIdentifier::Open => resp.try_accept(|_| {
+            SignalIdentifier::GetConfiguration => resp.try_accept((), |buf, _| {
                 let seid = data.read_be::<u8>()? >> 2;
                 data.finish()?;
-                let stream = self.streams.iter_mut()
-                    .find(|stream| stream.local_endpoint == seid)
+                trace!("Got GET_CONFIGURATION request for 0x{:02x}", seid);
+                let stream = self.get_stream(seid)?;
+                buf.write(stream.get_capabilities()?);
+                Ok(())
+            }),
+            // ([AVDTP] Section 8.11).
+            SignalIdentifier::Reconfigure => resp.try_accept(ServiceCategory::Unknown, |_, _| {
+                let acp_seid = data.read_be::<u8>()? >> 2;
+                let capabilities: Vec<Capability> = data.read_be()?;
+                data.finish()?;
+                trace!("Got RECONFIGURE request for 0x{:02x}", acp_seid);
+                let ep = self.local_endpoints.iter()
+                    .find(|ep| ep.seid == acp_seid)
                     .ok_or(ErrorCode::BadAcpSeid)?;
-                //info!("OPEN (0x{:02x}): {:?}", seid, sink.media_type);
+                let stream = self.streams.iter_mut()
+                    .find(|stream| stream.local_endpoint == acp_seid)
+                    .ok_or(ErrorCode::BadState)?;
+                stream.reconfigure(capabilities, ep)?;
+                Ok(())
+            }),
+            // ([AVDTP] Section 8.12).
+            SignalIdentifier::Open => resp.try_accept((), |_, _| {
+                let seid = data.read_be::<u8>()? >> 2;
+                data.finish()?;
+                trace!("Got OPEN request for 0x{:02x}", seid);
+                let stream = self.get_stream(seid)?;
                 stream.set_to_opening()?;
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 self.channel_sender.set(Some(tx));
@@ -203,54 +246,56 @@ impl AvdtpSession {
                 Ok(())
             }),
             // ([AVDTP] Section 8.13).
-            SignalIdentifier::Start => resp.try_accept(|_| {
-                //TODO handle rejects correctly
+            SignalIdentifier::Start => resp.try_accept(0x00u8, |_, ctx| {
                 while {
                     let seid = data.read_be::<u8>()? >> 2;
                     data.finish()?;
-                    let sink = self.streams.iter_mut()
-                        .find(|stream| stream.local_endpoint == seid)
-                        .ok_or(ErrorCode::BadAcpSeid)?;
-                    info!("START {:?}", seid);
+                    *ctx = seid;
+                    let sink = self.get_stream(seid)?;
+                    trace!("Got START request for 0x{:02x}", seid);
                     sink.start()?;
                     !data.is_empty()
                 } {}
                 Ok(())
             }),
             // ([AVDTP] Section 8.14).
-            SignalIdentifier::Close => resp.try_accept(|_| {
+            SignalIdentifier::Close => resp.try_accept((), |_, _| {
                 let seid = data.read_be::<u8>()? >> 2;
                 data.finish()?;
-                let stream = self.streams.iter_mut()
-                    .find(|stream| stream.local_endpoint == seid)
-                    .ok_or(ErrorCode::BadAcpSeid)?;
+                trace!("Got CLOSE request for 0x{:02x}", seid);
+                let stream = self.get_stream(seid)?;
                 stream.close()?;
-                info!("SUSPEND {:?}", seid);
                 Ok(())
             }),
             // ([AVDTP] Section 8.15).
-            SignalIdentifier::Suspend => resp.try_accept(|_| {
-                //TODO handle rejects correctly
+            SignalIdentifier::Suspend => resp.try_accept(0x00u8, |_, ctx| {
                 while {
                     let seid = data.read_be::<u8>()? >> 2;
                     data.finish()?;
-                    let sink = self.streams.iter_mut()
-                        .find(|stream| stream.local_endpoint == seid)
-                        .ok_or(ErrorCode::BadAcpSeid)?;
-                    info!("SUSPEND {:?}", seid);
+                    *ctx = seid;
+                    trace!("Got SUSPEND request for 0x{:02x}", seid);
+                    let sink = self.get_stream(seid)?;
                     sink.stop()?;
                     !data.is_empty()
                 } {}
                 Ok(())
             }),
             // ([AVDTP] Section 8.16).
-            SignalIdentifier::Abort => resp.general_reject(),
+            SignalIdentifier::Abort => resp.try_accept((), |_, _| {
+                let seid = data.read_be::<u8>()? >> 2;
+                data.finish()?;
+                trace!("Got ABORT request for 0x{:02x}", seid);
+                if let Some(id) = self.streams.iter_mut().position(|stream| stream.local_endpoint == seid) {
+                    self.streams.swap_remove(id);
+                }
+                Ok(())
+            }),
             // ([AVDTP] Section 8.17).
-            SignalIdentifier::SecurityControl => resp.general_reject(),
+            SignalIdentifier::SecurityControl => resp.unsupported(),
             // ([AVDTP] Section 8.18).
             SignalIdentifier::Unknown => resp.general_reject(),
             // ([AVDTP] Section 8.19).
-            SignalIdentifier::DelayReport => resp.general_reject()
+            SignalIdentifier::DelayReport => resp.unsupported()
         }
     }
 }
@@ -280,44 +325,36 @@ impl SignalMessageResponse {
         }
     }
 
-    pub fn try_accept<F: FnOnce(&mut BytesMut) -> Result<(), ErrorCode>>(&self, f: F) -> SignalMessage {
+    pub fn unsupported(&self) -> SignalMessage {
+        self.try_accept((), |_, _| Err(ErrorCode::NotSupportedCommand))
+    }
+
+    pub fn try_accept<F, C>(&self, err_ctx: C, f: F) -> SignalMessage
+        where F: FnOnce(&mut BytesMut, &mut C) -> Result<(), ErrorCode>,
+              C: Instruct<BigEndian>
+    {
         let mut buf = BytesMut::new();
-        match f(&mut buf) {
+        let mut ctx = err_ctx;
+        match f(&mut buf, &mut ctx) {
             Ok(()) => SignalMessage {
                 transaction_label: self.transaction_label,
                 message_type: MessageType::ResponseAccept,
                 signal_identifier: self.signal_identifier,
                 data: buf.freeze(),
             },
-            Err(reason) => self.reject(reason),
-        }
-    }
-
-    pub fn reject(&self, reason: ErrorCode) -> SignalMessage {
-        warn!("Rejecting signal {:?} because of {:?}", self.signal_identifier, reason);
-        SignalMessage {
-            transaction_label: self.transaction_label,
-            message_type: MessageType::ResponseReject,
-            signal_identifier: self.signal_identifier,
-            data: {
-                let mut buf = BytesMut::new();
+            Err(reason) => {
+                warn!("Rejecting signal {:?} because of {:?}", self.signal_identifier, reason);
+                buf.clear();
+                buf.write_be(&ctx);
                 buf.write_be(&reason);
-                buf.freeze()
+                SignalMessage {
+                    transaction_label: self.transaction_label,
+                    message_type: MessageType::ResponseReject,
+                    signal_identifier: self.signal_identifier,
+                    data: buf.freeze(),
+                }
             },
         }
     }
-
-    //pub fn accept<F: FnOnce(&mut BytesMut)>(&self, f: F) -> SignalMessage {
-    //    SignalMessage {
-    //        transaction_label: self.transaction_label,
-    //        message_type: MessageType::ResponseAccept,
-    //        signal_identifier: self.signal_identifier,
-    //        data: {
-    //            let mut buf = BytesMut::new();
-    //            f(&mut buf);
-    //            buf.freeze()
-    //        },
-    //    }
-    //}
 
 }

@@ -2,15 +2,11 @@ use std::io::Write;
 use std::path::Path;
 use bytes::Bytes;
 use tracing::debug;
-use crate::avdtp::capabilities::Capability;
 use crate::avdtp::StreamHandler;
 
 pub struct DebugStreamHandler;
 
 impl StreamHandler for DebugStreamHandler {
-    fn on_reconfigure(&mut self, capabilities: &[Capability]) {
-        debug!("Reconfigure: {:?}", capabilities);
-    }
 
     fn on_play(&mut self) {
         debug!("Play");
@@ -40,9 +36,6 @@ impl FileDumpHandler {
 }
 
 impl StreamHandler for FileDumpHandler {
-    fn on_reconfigure(&mut self, _capabilities: &[Capability]) {
-
-    }
 
     fn on_play(&mut self) {
 

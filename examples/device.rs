@@ -177,9 +177,6 @@ impl SbcStreamHandler {
 }
 
 impl StreamHandler for SbcStreamHandler {
-    fn on_reconfigure(&mut self, _capabilities: &[Capability]) {
-        todo!()
-    }
 
     fn on_play(&mut self) {
         self.audio_session.play();

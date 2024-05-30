@@ -28,6 +28,8 @@ pub struct StreamEndpoint {
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Exstruct, Instruct)]
 #[repr(u8)]
 pub enum ServiceCategory {
+    #[instructor(default)]
+    Unknown = 0x00,
     MediaTransport = 0x01,
     Reporting = 0x02,
     Recovery = 0x03,

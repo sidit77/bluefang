@@ -11,6 +11,16 @@ pub enum Capability {
     Generic(ServiceCategory, Vec<u8>),
 }
 
+impl Capability {
+    pub fn is_basic(&self) -> bool {
+        // ([AVDTP] Section 8.21.1).
+        match self {
+            Capability::Generic(ServiceCategory::DelayReporting, _) => false,
+            _ => true
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MediaCodec {
     Audio(AudioCodec),

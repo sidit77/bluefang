@@ -49,7 +49,7 @@ pub struct Stream {
     endpoint_usage_lock: Arc<AtomicBool>,
     pub local_endpoint: u8,
     pub remote_endpoint: u8,
-    pub capabilities: Vec<Capability>,
+    capabilities: Vec<Capability>,
     channel: Option<Channel>,
     handler: Box<dyn StreamHandler>
 }
@@ -67,6 +67,14 @@ impl Stream {
             handler,
             endpoint_usage_lock: local_endpoint.in_use.clone(),
         })
+    }
+
+    pub fn reconfigure(&mut self, capabilities: Vec<Capability>, ep: &LocalEndpoint) -> Result<(), ErrorCode> {
+        assert_eq!(self.local_endpoint, ep.seid);
+        ensure!(matches!(self.state, StreamState::Open), ErrorCode::BadState);
+        self.handler = (ep.stream_handler_factory)(&capabilities);
+        self.capabilities = capabilities;
+        Ok(())
     }
 
     pub fn set_to_opening(&mut self) -> Result<(), ErrorCode> {
@@ -109,6 +117,11 @@ impl Stream {
         assert!(self.channel.is_none());
         self.channel = Some(channel);
         self.state = StreamState::Open;
+    }
+
+    pub fn get_capabilities(&self) -> Result<&Vec<Capability>, ErrorCode> {
+        ensure!(self.state != StreamState::Closing, ErrorCode::BadState);
+        Ok(&self.capabilities)
     }
 
 }
@@ -156,7 +169,6 @@ impl Future for Stream {
 }
 
 pub trait StreamHandler: 'static {
-    fn on_reconfigure(&mut self, capabilities: &[Capability]);
     fn on_play(&mut self);
     fn on_stop(&mut self);
 
