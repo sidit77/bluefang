@@ -20,17 +20,19 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use bluefang::a2dp::sbc::SbcMediaCodecInformation;
 use bluefang::a2dp::sdp::A2dpSinkServiceRecord;
+use bluefang::avctp::AvctpServerBuilder;
 use bluefang::avdtp::{AvdtpServerBuilder, LocalEndpoint, StreamHandler};
 use bluefang::avdtp::capabilities::{Capability, MediaCodecCapability};
 use bluefang::avdtp::error::ErrorCode;
 use bluefang::avdtp::packets::{MediaType, StreamEndpointType};
+use bluefang::avrcp::sdp::{AvrcpControllerServiceRecord, AvrcpTargetServiceRecord};
 
 use bluefang::firmware::RealTekFirmwareLoader;
 use bluefang::hci::connection::ConnectionManagerBuilder;
 use bluefang::hci::consts::{ClassOfDevice, MajorDeviceClass, MajorServiceClasses};
 use bluefang::hci::Hci;
 use bluefang::host::usb::UsbController;
-use bluefang::l2cap::{AVDTP_PSM, L2capServerBuilder, SDP_PSM};
+use bluefang::l2cap::{AVCTP_PSM, AVDTP_PSM, L2capServerBuilder, SDP_PSM};
 use bluefang::sdp::SdpServerBuilder;
 
 
@@ -68,6 +70,10 @@ async fn main() -> anyhow::Result<()> {
         let _l2cap_server = L2capServerBuilder::default()
             .with_server(SDP_PSM, SdpServerBuilder::default()
                 .with_record(A2dpSinkServiceRecord::new(0x00010001))
+                .with_record(AvrcpControllerServiceRecord::new(0x00010002))
+                .with_record(AvrcpTargetServiceRecord::new(0x00010003))
+                .build())
+            .with_server(AVCTP_PSM, AvctpServerBuilder::default()
                 .build())
             .with_server(AVDTP_PSM, AvdtpServerBuilder::default()
                 .with_endpoint(LocalEndpoint {
