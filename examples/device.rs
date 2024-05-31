@@ -20,11 +20,11 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use bluefang::a2dp::sbc::SbcMediaCodecInformation;
 use bluefang::a2dp::sdp::A2dpSinkServiceRecord;
-use bluefang::avctp::AvctpBuilder;
 use bluefang::avdtp::{AvdtpBuilder, LocalEndpoint, StreamHandler};
 use bluefang::avdtp::capabilities::{Capability, MediaCodecCapability};
 use bluefang::avdtp::error::ErrorCode;
 use bluefang::avdtp::packets::{MediaType, StreamEndpointType};
+use bluefang::avrcp::{AvrcpBuilder};
 use bluefang::avrcp::sdp::{AvrcpControllerServiceRecord, AvrcpTargetServiceRecord};
 
 use bluefang::firmware::RealTekFirmwareLoader;
@@ -73,7 +73,7 @@ async fn main() -> anyhow::Result<()> {
                 .with_record(AvrcpControllerServiceRecord::new(0x00010002))
                 .with_record(AvrcpTargetServiceRecord::new(0x00010003))
                 .build())
-            .with_protocol(AvctpBuilder::default()
+            .with_protocol(AvrcpBuilder::default()
                 .build())
             .with_protocol(AvdtpBuilder::default()
                 .with_endpoint(LocalEndpoint {

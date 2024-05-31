@@ -40,6 +40,14 @@ impl Uuid {
         }
     }
 
+    #[inline]
+    pub fn as_u16(self) -> Option<u16> {
+        match self.as_packed() {
+            PackedUuid::Uuid16(value) => Some(value),
+            _ => None
+        }
+    }
+
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Instruct)]

@@ -1,7 +1,8 @@
 use bytes::{BufMut, Bytes, BytesMut};
-use instructor::{Buffer, Error, Exstruct, Instruct};
+use instructor::{Buffer, BufferMut, Error, Exstruct, Instruct};
 
-use crate::{ensure, log_assert};
+use crate::{ensure, hci, log_assert};
+use crate::l2cap::channel::Channel;
 use crate::sdp::Uuid;
 
 // ([AVCTP] Section 6.1)
@@ -121,6 +122,26 @@ impl MessageAssembler {
     }
 }
 
+
+pub trait ControlChannelExt {
+    fn send_msg(&mut self, message: Message) -> Result<(), hci::Error>;
+}
+
+impl ControlChannelExt for Channel {
+    fn send_msg(&mut self, message: Message) -> Result<(), hci::Error> {
+        //TODO fragment message if necessary
+        let mut buffer = BytesMut::new();
+        buffer.write(&PacketHeader {
+            transaction_label: message.transaction_label,
+            packet_type: PacketType::Single,
+            message_type: message.message_type,
+        });
+        buffer.write_be(&message.profile_id.as_u16().expect("Invalid profile id"));
+        buffer.put(message.data);
+        self.write(buffer.freeze())?;
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod test {

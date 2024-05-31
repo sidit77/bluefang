@@ -301,3 +301,37 @@ impl<P> ProtocolHandlerProvider for P where P : ProtocolHandler + Clone + 'stati
         vec![Box::new(self.clone())]
     }
 }
+
+pub struct ProtocolDelegate<H, F> {
+    psm: u64,
+    handler: H,
+    map_func: F
+}
+
+impl<H, F> ProtocolDelegate<H, F>
+    where
+        H: Send + 'static,
+        F: Fn(&H, Channel) + Send + 'static
+{
+    pub fn new<I: Into<u64>>(psm: I, handler: H, map_func: F) -> Box<dyn ProtocolHandler> {
+        Box::new(Self {
+            psm: psm.into(),
+            handler,
+            map_func
+        })
+    }
+}
+
+impl<H, F> ProtocolHandler for ProtocolDelegate<H, F>
+    where
+        H: Send,
+        F: Fn(&H, Channel) + Send
+{
+    fn psm(&self) -> u64 {
+        self.psm
+    }
+
+    fn handle(&self, channel: Channel) {
+        (self.map_func)(&self.handler, channel)
+    }
+}

@@ -6,13 +6,13 @@ use crate::sdp::ids::browse_groups::PUBLIC_BROWSE_ROOT;
 use crate::sdp::ids::protocols::{AVCTP, L2CAP};
 
 // ([Assigned Numbers] Section 3.3).
-const REMOTE_CONTROL_TARGET_SERVICE: Uuid = Uuid::from_u16(0x110C);
+pub const REMOTE_CONTROL_TARGET_SERVICE: Uuid = Uuid::from_u16(0x110C);
 
 // ([Assigned Numbers] Section 3.3).
-const REMOTE_CONTROL_SERVICE: Uuid = Uuid::from_u16(0x110E);
+pub const REMOTE_CONTROL_SERVICE: Uuid = Uuid::from_u16(0x110E);
 
 // ([Assigned Numbers] Section 3.3).
-const REMOTE_CONTROL_CONTROLLER_SERVICE: Uuid = Uuid::from_u16(0x110F);
+pub const REMOTE_CONTROL_CONTROLLER_SERVICE: Uuid = Uuid::from_u16(0x110F);
 
 // ([Assigned Numbers] Section 5.1.2).
 pub const SUPPORTED_FEATURES_ID: u16 = 0x0311;
