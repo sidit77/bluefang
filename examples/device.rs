@@ -20,8 +20,8 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use bluefang::a2dp::sbc::SbcMediaCodecInformation;
 use bluefang::a2dp::sdp::A2dpSinkServiceRecord;
-use bluefang::avctp::AvctpServerBuilder;
-use bluefang::avdtp::{AvdtpServerBuilder, LocalEndpoint, StreamHandler};
+use bluefang::avctp::AvctpBuilder;
+use bluefang::avdtp::{AvdtpBuilder, LocalEndpoint, StreamHandler};
 use bluefang::avdtp::capabilities::{Capability, MediaCodecCapability};
 use bluefang::avdtp::error::ErrorCode;
 use bluefang::avdtp::packets::{MediaType, StreamEndpointType};
@@ -32,8 +32,8 @@ use bluefang::hci::connection::ConnectionManagerBuilder;
 use bluefang::hci::consts::{ClassOfDevice, MajorDeviceClass, MajorServiceClasses};
 use bluefang::hci::Hci;
 use bluefang::host::usb::UsbController;
-use bluefang::l2cap::{AVCTP_PSM, AVDTP_PSM, L2capServerBuilder, SDP_PSM};
-use bluefang::sdp::SdpServerBuilder;
+use bluefang::l2cap::{L2capServerBuilder};
+use bluefang::sdp::SdpBuilder;
 
 
 #[tokio::main]
@@ -68,14 +68,14 @@ async fn main() -> anyhow::Result<()> {
             .spawn(host.clone())
             .await?;
         let _l2cap_server = L2capServerBuilder::default()
-            .with_server(SDP_PSM, SdpServerBuilder::default()
+            .with_protocol(SdpBuilder::default()
                 .with_record(A2dpSinkServiceRecord::new(0x00010001))
                 .with_record(AvrcpControllerServiceRecord::new(0x00010002))
                 .with_record(AvrcpTargetServiceRecord::new(0x00010003))
                 .build())
-            .with_server(AVCTP_PSM, AvctpServerBuilder::default()
+            .with_protocol(AvctpBuilder::default()
                 .build())
-            .with_server(AVDTP_PSM, AvdtpServerBuilder::default()
+            .with_protocol(AvdtpBuilder::default()
                 .with_endpoint(LocalEndpoint {
                     media_type: MediaType::Audio,
                     seid: 1,

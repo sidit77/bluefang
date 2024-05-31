@@ -14,7 +14,7 @@ use tokio::spawn;
 use tracing::{error, trace, warn};
 use crate::{ensure, hci};
 use crate::l2cap::channel::Channel;
-use crate::l2cap::Server;
+use crate::l2cap::{ProtocolHandler, SDP_PSM};
 use crate::sdp::error::{Error, SdpErrorCodes};
 use crate::sdp::service::{Service};
 
@@ -27,11 +27,11 @@ pub trait ServiceRecord {
 }
 
 #[derive(Default)]
-pub struct SdpServerBuilder {
+pub struct SdpBuilder {
     records: BTreeMap<u32, Service>
 }
 
-impl SdpServerBuilder {
+impl SdpBuilder {
 
     pub fn with_record<T: ServiceRecord>(mut self, record: T) -> Self {
         assert!(!(0x00000001..=0x0000FFFF).contains(&record.handle()), "Reserved service record handle");
@@ -40,20 +40,21 @@ impl SdpServerBuilder {
         self
     }
 
-    pub fn build(self) -> SdpServer {
-        SdpServer { records: Arc::new(self.records) }
+    pub fn build(self) -> Sdp {
+        Sdp { records: Arc::new(self.records) }
     }
 
 }
 
 #[derive(Clone)]
-pub struct SdpServer {
+pub struct Sdp {
     records: Arc<BTreeMap<u32, Service>>
 }
 
-impl Server for SdpServer {
+impl ProtocolHandler for Sdp {
+    fn psm(&self) -> u64 { SDP_PSM as u64 }
 
-    fn on_connection(&mut self, mut channel: Channel) {
+    fn handle(&self, mut channel: Channel) {
         let server = self.clone();
         spawn(async move {
             if let Err(err) = channel.configure().await {
@@ -66,10 +67,9 @@ impl Server for SdpServer {
             trace!("SDP connection closed");
         });
     }
-
 }
 
-impl SdpServer {
+impl Sdp {
 
     async fn handle_connection(self, mut channel: Channel) -> Result<(), hci::Error> {
         let mut buffer = BytesMut::new();

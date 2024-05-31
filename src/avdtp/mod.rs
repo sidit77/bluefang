@@ -18,7 +18,7 @@ use crate::avdtp::error::ErrorCode;
 use crate::avdtp::packets::{MessageType, ServiceCategory, SignalChannelExt, SignalIdentifier, SignalMessage, SignalMessageAssembler};
 use crate::hci::Error;
 use crate::l2cap::channel::Channel;
-use crate::l2cap::Server;
+use crate::l2cap::{AVDTP_PSM, ProtocolHandler};
 use crate::utils::{MutexCell, select_all, stall_if_none};
 
 pub use endpoint::{StreamHandler, LocalEndpoint};
@@ -26,19 +26,19 @@ use crate::avdtp::capabilities::Capability;
 use crate::ensure;
 
 #[derive(Default)]
-pub struct AvdtpServerBuilder {
+pub struct AvdtpBuilder {
     endpoints: Vec<LocalEndpoint>,
 }
 
-impl AvdtpServerBuilder {
+impl AvdtpBuilder {
 
     pub fn with_endpoint(mut self, endpoint: LocalEndpoint) -> Self {
         self.endpoints.push(endpoint);
         self
     }
 
-    pub fn build(self) -> AvdtpServer {
-        AvdtpServer {
+    pub fn build(self) -> Avdtp {
+        Avdtp {
             pending_streams: Arc::new(Mutex::new(BTreeMap::new())),
             local_endpoints: self.endpoints.into(),
         }
@@ -46,13 +46,17 @@ impl AvdtpServerBuilder {
 }
 
 type ChannelSender = MutexCell<Option<Sender<Channel>>>;
-pub struct AvdtpServer {
+
+#[derive(Clone)]
+pub struct Avdtp {
     pending_streams: Arc<Mutex<BTreeMap<u16, Arc<ChannelSender>>>>,
     local_endpoints: Arc<[LocalEndpoint]>,
 }
 
-impl Server for AvdtpServer {
-    fn on_connection(&mut self, mut channel: Channel) {
+impl ProtocolHandler for Avdtp {
+    fn psm(&self) -> u64 { AVDTP_PSM as u64 }
+
+    fn handle(&self, mut channel: Channel) {
         let handle = channel.connection_handle;
         let pending_stream = self.pending_streams.lock().get(&handle).cloned();
         match pending_stream {
@@ -101,6 +105,7 @@ impl Server for AvdtpServer {
         }
     }
 }
+
 
 struct AvdtpSession {
     channel_sender: Arc<ChannelSender>,

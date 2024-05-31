@@ -8,26 +8,30 @@ use tracing::{info, trace, warn};
 use crate::avctp::packets::MessageAssembler;
 use crate::hci;
 use crate::l2cap::channel::Channel;
-use crate::l2cap::Server;
+use crate::l2cap::{AVCTP_PSM, ProtocolHandler};
 
 #[derive(Default)]
-pub struct AvctpServerBuilder;
+pub struct AvctpBuilder;
 
-impl AvctpServerBuilder {
-    pub fn build(self) -> AvctpServer {
-        AvctpServer {
+impl AvctpBuilder {
+    pub fn build(self) -> Avctp {
+        Avctp {
             existing_connections: Arc::new(Default::default()),
         }
     }
 }
 
-
-pub struct AvctpServer {
+#[derive(Clone)]
+pub struct Avctp {
     existing_connections: Arc<Mutex<BTreeSet<u16>>>
 }
 
-impl Server for AvctpServer {
-    fn on_connection(&mut self, mut channel: Channel) {
+impl ProtocolHandler for Avctp {
+    fn psm(&self) -> u64 {
+        AVCTP_PSM as u64
+    }
+
+    fn handle(&self, mut channel: Channel) {
         let handle = channel.connection_handle;
         let success = self.existing_connections.lock().insert(handle);
         if success {
@@ -47,6 +51,7 @@ impl Server for AvctpServer {
         }
     }
 }
+
 
 struct State {
 

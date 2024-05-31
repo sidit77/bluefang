@@ -31,15 +31,22 @@ const CID_RANGE_DYNAMIC: Range<u16> = 0x0040..0xFFFF;
 
 #[derive(Default)]
 pub struct L2capServerBuilder {
-    servers: BTreeMap<u64, Box<dyn Server + Send>>,
+    handlers: BTreeMap<u64, Box<dyn ProtocolHandler>>,
 }
 
 impl L2capServerBuilder {
 
-    pub fn with_server<P: Into<u64>, S: Server + Send + 'static>(mut self, psm: P, server: S) -> Self {
-        self.servers.insert(psm.into(), Box::new(server));
+    pub fn with_protocol<P: ProtocolHandlerProvider>(mut self, provider: P) -> Self {
+        for handler in provider.protocol_handlers() {
+            assert!(self.handlers.insert(handler.psm(), handler).is_none(), "Duplicate PSMs");
+        }
         self
     }
+
+    //pub fn with_server<P: Into<u64>, S: Server + Send + 'static>(mut self, psm: P, server: S) -> Self {
+    //    self.servers.insert(psm.into(), Box::new(server));
+    //    self
+    //}
 
     pub fn spawn(self, hci: Arc<Hci>) -> Result<JoinHandle<()>, Error> {
         let mut data = {
@@ -63,7 +70,7 @@ impl L2capServerBuilder {
             let mut state = State {
                 sender,
                 connections: Default::default(),
-                servers: self.servers,
+                handlers: self.handlers,
                 channels: Default::default(),
                 next_signaling_id: Arc::new(Default::default()),
             };
@@ -100,7 +107,7 @@ struct PhysicalConnection {
 struct State {
     sender: AclSender,
     connections: BTreeMap<u16, PhysicalConnection>,
-    servers: BTreeMap<u64, Box<dyn Server + Send>>,
+    handlers: BTreeMap<u64, Box<dyn ProtocolHandler>>,
     channels: BTreeMap<u16, (u16, MpscSender<ChannelEvent>)>,
     next_signaling_id: Arc<AtomicU8>
 }
@@ -198,7 +205,7 @@ impl State {
 
     fn handle_channel_connection(&mut self, handle: u16, psm: u64, scid: u16) -> Result<u16, ConnectionResult> {
         debug!("        Connection request: PSM={:04X} SCID={:04X}", psm, scid);
-        let server = self.servers.get_mut(&psm).ok_or(ConnectionResult::RefusedPsmNotSupported)?;
+        let server = self.handlers.get_mut(&psm).ok_or(ConnectionResult::RefusedPsmNotSupported)?;
         //ensure!(self.servers.contains_key(&psm), ConnectionResult::RefusedPsmNotSupported);
         ensure!(CID_RANGE_DYNAMIC.contains(&scid), ConnectionResult::RefusedInvalidSourceCid);
         //TODO check if source cid already exists for physical connection
@@ -220,7 +227,7 @@ impl State {
             remote_mtu: 0,
         };
         self.channels.insert(dcid, (scid, tx));
-        server.on_connection(channel);
+        server.handle(channel);
 
         Ok(dcid)
     }
@@ -275,10 +282,22 @@ pub enum ChannelEvent {
 }
 
 
+pub trait ProtocolHandlerProvider {
 
-pub trait Server {
-
-    fn on_connection(&mut self, channel: Channel);
+    fn protocol_handlers(&self) -> Vec<Box<dyn ProtocolHandler>>;
 
 }
 
+pub trait ProtocolHandler: Send {
+
+    fn psm(&self) -> u64;
+
+    //TODO Add a return code to indicate if the channel was expected
+    fn handle(&self, channel: Channel);
+}
+
+impl<P> ProtocolHandlerProvider for P where P : ProtocolHandler + Clone + 'static {
+    fn protocol_handlers(&self) -> Vec<Box<dyn ProtocolHandler>> {
+        vec![Box::new(self.clone())]
+    }
+}
