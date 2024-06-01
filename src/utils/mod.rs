@@ -23,6 +23,12 @@ macro_rules! ensure {
             return Err($err.into());
         }
     };
+    ($cond:expr, $err:expr, $($arg:tt)+) => {
+        if !($cond) {
+            tracing::warn!($($arg)+);
+            return Err($err.into());
+        }
+    };
 }
 
 #[macro_export]

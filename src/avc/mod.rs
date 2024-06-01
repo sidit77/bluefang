@@ -4,17 +4,17 @@ use crate::ensure;
 // ([AVC] Section 7.1)
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Instruct, Exstruct)]
 #[instructor(endian = "big")]
-struct Frame {
+pub struct Frame {
     #[instructor(bitfield(u8))]
     #[instructor(bits(0..4))]
-    ctype: CommandCodes,
-    subunit: Subunit,
-    opcode: Opcode,
+    pub ctype: CommandCode,
+    pub subunit: Subunit,
+    pub opcode: Opcode,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Instruct, Exstruct)]
 #[repr(u8)]
-pub enum CommandCodes {
+pub enum CommandCode {
     // ([AVC] Section 7.3.1)
     Control = 0x00,
     Status = 0x01,
@@ -32,7 +32,7 @@ pub enum CommandCodes {
     Interim = 0x0F,
 }
 
-impl CommandCodes {
+impl CommandCode {
     pub fn is_response(self) -> bool {
         self as u8 >= 0x08
     }
@@ -151,7 +151,7 @@ impl Instruct<BigEndian> for Subunit {
 mod tests {
     use bytes::{Buf, Bytes, BytesMut};
     use instructor::{Buffer, BufferMut};
-    use crate::avc::{CommandCodes, Frame, Opcode, Subunit, SubunitType};
+    use crate::avc::{CommandCode, Frame, Opcode, Subunit, SubunitType};
 
     #[test]
     fn subunit_parsing() {
@@ -176,7 +176,7 @@ mod tests {
         let mut buf = Bytes::from_static(&[0x03, 0x48, 0x00]);
         let frame: Frame = buf.read_be().unwrap();
         assert_eq!(frame, Frame {
-            ctype: CommandCodes::Notify,
+            ctype: CommandCode::Notify,
             subunit: Subunit { ty: SubunitType::Panel, id: 0 },
             opcode: Opcode::VendorDependent,
         });

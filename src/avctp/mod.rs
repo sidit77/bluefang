@@ -8,6 +8,7 @@ use crate::l2cap::channel::Channel;
 use crate::sdp::Uuid;
 
 pub use packets::{MessageType, Message};
+use crate::hci;
 
 pub struct Avctp {
     channel: Channel,
@@ -52,6 +53,11 @@ impl Avctp {
             }
         }
         None
+    }
+
+    pub fn send_msg(&mut self, message: Message) -> Result<(), hci::Error> {
+        //TODO Fragment messages larger than mtu
+        self.channel.send_msg(message)
     }
 
 }
