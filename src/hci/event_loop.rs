@@ -200,9 +200,9 @@ impl State {
                 let mut handles = data.split_to(count * 2);
                 let mut counts = data.split_to(count * 2);
                 for _ in 0..count {
-                    let handle: u16 = handles.read_le()?;
+                    let _handle: u16 = handles.read_le()?;
                     let count: u16 = counts.read_le()?;
-                    trace!("Flushed {} packets for handle {}", count, handle);
+                    //trace!("Flushed {} packets for handle {}", count, handle);
                     self.in_flight = self.in_flight.saturating_sub(count as u32);
                 }
                 data.finish()?;

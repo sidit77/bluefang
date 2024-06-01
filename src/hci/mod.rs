@@ -150,7 +150,7 @@ pub struct AclSender {
 
 impl AclSender {
     pub fn send(&self, handle: u16, pdu: Bytes) -> Result<(), Error> {
-        trace!("Sending ACL data to handle 0x{:04X}", handle);
+        //trace!("Sending ACL data to handle 0x{:04X}", handle);
         let mut buffer = BytesMut::with_capacity(512);
         let mut pb = BoundaryFlag::FirstNonAutomaticallyFlushable;
         for chunk in pdu.chunks(self.max_size) {

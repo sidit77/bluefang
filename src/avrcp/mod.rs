@@ -5,7 +5,7 @@ use instructor::{BigEndian, Buffer, BufferMut, Exstruct, Instruct};
 use instructor::utils::u24;
 use parking_lot::Mutex;
 use tokio::spawn;
-use tracing::{trace, warn};
+use tracing::{info, trace, warn};
 use crate::avc::{CommandCode, Frame, Opcode};
 use crate::avctp::{Avctp, Message, MessageType};
 use crate::avrcp::sdp::REMOTE_CONTROL_SERVICE;
@@ -56,7 +56,8 @@ impl Avrcp {
                 }
                 let mut state = State {
                     avctp: Avctp::new(channel, [REMOTE_CONTROL_SERVICE]),
-                    assembler: Default::default(),
+                    command_assembler: Default::default(),
+                    response_assembler: Default::default(),
                     volume: Default::default(),
                 };
                 state.run().await.unwrap_or_else(|err| {
@@ -73,7 +74,8 @@ impl Avrcp {
 
 struct State {
     avctp: Avctp,
-    assembler: CommandAssembler,
+    command_assembler: CommandAssembler,
+    response_assembler: CommandAssembler,
 
     volume: Volume,
 }
@@ -94,9 +96,17 @@ impl State {
             Opcode::VendorDependent => {
                 let company_id: u24 = message.data.read_be::<u24>()?;
                 ensure!(company_id == BLUETOOTH_SIG_COMPANY_ID, Error2::NotImplemented, "Unsupported company id: {:#06x}", company_id);
-                if let Some(Command { pdu, parameters }) = self.assembler.process_msg(message.data)? {
-                    self.process_command(message.transaction_label, avc_frame.ctype, pdu, parameters)?;
+                if avc_frame.ctype.is_response() {
+                    if let Some(Command { pdu, parameters }) = self.response_assembler.process_msg(message.data)? {
+                        //self.process_command(message.transaction_label, avc_frame.ctype, pdu, parameters)?;
+                        info!("Received response: {:?} ({} bytes)", pdu, parameters.len());
+                    }
+                } else {
+                    if let Some(Command { pdu, parameters }) = self.command_assembler.process_msg(message.data)? {
+                        self.process_command(message.transaction_label, avc_frame.ctype, pdu, parameters)?;
+                    }
                 }
+
                 Ok(())
             }
             // TODO Support pass-through frames
@@ -126,7 +136,7 @@ impl State {
         });
     }
 
-    fn process_command(&mut self, transaction: u8, cmd: CommandCode, pdu: Pdu, mut parameters: Bytes) -> Result<(), ErrorCode> {
+    fn process_command(&mut self, transaction: u8, _cmd: CommandCode, pdu: Pdu, mut parameters: Bytes) -> Result<(), ErrorCode> {
         match pdu {
             // ([AVRCP] Section 6.7.2)
             Pdu::RegisterNotification => {
@@ -135,9 +145,18 @@ impl State {
                 let _: u32 = parameters.read_be()?;
                 parameters.finish()?;
                 ensure!(event == Event::VolumeChanged, ErrorCode::InvalidParameter);
+                // ([AVRCP] Section 6.13.3)
                 self.send_command(transaction, CommandCode::Interim, pdu, (event, self.volume));
                 Ok(())
-            }
+            },
+            // ([AVRCP] Section 6.13.2)
+            Pdu::SetAbsoluteVolume => {
+                self.volume = parameters.read_be()?;
+                parameters.finish()?;
+                info!("Volume set to: {}", self.volume.0);
+                self.send_command(transaction, CommandCode::Accepted, pdu, self.volume);
+                Ok(())
+            },
             _ => {
                 warn!("Unsupported pdu: {:?}", pdu);
                 Err(ErrorCode::InvalidCommand)
