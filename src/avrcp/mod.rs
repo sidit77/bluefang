@@ -5,8 +5,8 @@ use instructor::{BigEndian, Buffer, BufferMut, Exstruct, Instruct};
 use instructor::utils::u24;
 use parking_lot::Mutex;
 use tokio::spawn;
-use tracing::{error, info, trace, warn};
-use crate::avc::{CommandCode, Frame, Opcode};
+use tracing::{info, trace, warn};
+use crate::avc::{CommandCode, Frame, Opcode, Subunit, SubunitType};
 use crate::avctp::{Avctp, Message, MessageType};
 use crate::avrcp::sdp::REMOTE_CONTROL_SERVICE;
 use crate::{ensure, hci};
@@ -90,7 +90,7 @@ impl State {
                     if !frame.ctype.is_response() {
                         self.send_avc(transaction_label, Frame { ctype: CommandCode::NotImplemented, ..frame }, payload);
                     } else {
-                        error!("Failed to handle response: {:?}", frame);
+                        warn!("Failed to handle response: {:?}", frame);
                     }
                 }
             }
@@ -99,9 +99,9 @@ impl State {
     }
 
     fn process_message(&mut self, frame: Frame, mut message: Message) -> Result<(), AvcError> {
-        ensure!(frame.subunit == PANEL, AvcError::NotImplemented, "Unsupported subunit: {:?}", frame.subunit);
         match frame.opcode {
             Opcode::VendorDependent => {
+                ensure!(frame.subunit == PANEL, AvcError::NotImplemented, "Unsupported subunit: {:?}", frame.subunit);
                 let company_id: u24 = message.data.read_be::<u24>()?;
                 ensure!(company_id == BLUETOOTH_SIG_COMPANY_ID, AvcError::NotImplemented, "Unsupported company id: {:#06x}", company_id);
                 if frame.ctype.is_response() {
@@ -117,6 +117,29 @@ impl State {
                     }
                 }
 
+                Ok(())
+            },
+            Opcode::UnitInfo => {
+                const UNIT_INFO: Subunit = Subunit {ty: SubunitType::Unit, id: 7};
+                ensure!(frame.ctype == CommandCode::Status, AvcError::NotImplemented, "Unsupported command type: {:?}", frame.ctype);
+                ensure!(frame.subunit == UNIT_INFO, AvcError::NotImplemented, "Unsupported subunit: {:?}", frame.subunit);
+                self.send_avc(message.transaction_label, Frame {
+                    ctype: CommandCode::Implemented,
+                    subunit: UNIT_INFO,
+                    opcode: Opcode::UnitInfo,
+                }, (7u8, PANEL, BLUETOOTH_SIG_COMPANY_ID));
+                Ok(())
+            },
+            Opcode::SubunitInfo => {
+                const UNIT_INFO: Subunit = Subunit {ty: SubunitType::Unit, id: 7};
+                ensure!(frame.ctype == CommandCode::Status, AvcError::NotImplemented, "Unsupported command type: {:?}", frame.ctype);
+                ensure!(frame.subunit == UNIT_INFO, AvcError::NotImplemented, "Unsupported subunit: {:?}", frame.subunit);
+                let page: u8 = message.data.read_be()?;
+                self.send_avc(message.transaction_label, Frame {
+                    ctype: CommandCode::Implemented,
+                    subunit: UNIT_INFO,
+                    opcode: Opcode::SubunitInfo,
+                }, (page, PANEL, [0xffu8; 3]));
                 Ok(())
             }
             // TODO Support pass-through frames

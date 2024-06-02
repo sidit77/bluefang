@@ -133,7 +133,7 @@ impl Instruct<BigEndian> for Subunit {
     fn write_to_buffer<B: BufferMut>(&self, buffer: &mut B) {
         assert_ne!(self.ty, SubunitType::Extended);
         assert!(self.id <= 514 && self.id != 5 && self.id != 6);
-        let id = self.id.min(5) as u8;
+        let id = if self.id == 7 { 7 } else { self.id.min(5) as u8 };
         buffer.write_be(&SubunitHeader { ty: self.ty, id });
         let rem = self.id - id as u32;
         if rem > 0 {
