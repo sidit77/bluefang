@@ -92,6 +92,88 @@ pub enum Opcode {
     Power = 0xb2
 }
 
+// ([AVC Panel] Table 9.21)
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Instruct, Exstruct)]
+#[repr(u8)]
+pub enum PassThroughOp {
+    Select = 0x00,
+    Up = 0x01,
+    Down = 0x02,
+    Left = 0x03,
+    Right = 0x04,
+    RightUp = 0x05,
+    RightDown = 0x06,
+    LeftUp = 0x07,
+    LeftDown = 0x08,
+    RootMenu = 0x09,
+    SetupMenu = 0x0A,
+    ContentsMenu = 0x0B,
+    FavoriteMenu = 0x0C,
+    Exit = 0x0D,
+    Number0 = 0x20,
+    Number1 = 0x21,
+    Number2 = 0x22,
+    Number3 = 0x23,
+    Number4 = 0x24,
+    Number5 = 0x25,
+    Number6 = 0x26,
+    Number7 = 0x27,
+    Number8 = 0x28,
+    Number9 = 0x29,
+    Dot = 0x2A,
+    Enter = 0x2B,
+    Clear = 0x2C,
+    ChannelUp = 0x30,
+    ChannelDown = 0x31,
+    PreviousChannel = 0x32,
+    SoundSelect = 0x33,
+    InputSelect = 0x34,
+    DisplayInformation = 0x35,
+    Help = 0x36,
+    PageUp = 0x37,
+    PageDown = 0x38,
+    Power = 0x40,
+    VolumeUp = 0x41,
+    VolumeDown = 0x42,
+    Mute = 0x43,
+    Play = 0x44,
+    Stop = 0x45,
+    Pause = 0x46,
+    Record = 0x47,
+    Rewind = 0x48,
+    FastForward = 0x49,
+    Eject = 0x4A,
+    Forward = 0x4B,
+    Backward = 0x4C,
+    Angle = 0x50,
+    Subpicture = 0x51,
+    F1 = 0x71,
+    F2 = 0x72,
+    F3 = 0x73,
+    F4 = 0x74,
+    F5 = 0x75,
+    VendorUnique = 0x7E,
+}
+
+// ([AVC Panel] Section 9.4)
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Instruct, Exstruct)]
+#[repr(u8)]
+pub enum PassThroughState {
+    Pressed = 0x00,
+    Released = 0x01,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Instruct, Exstruct)]
+#[instructor(endian = "big")]
+pub struct PassThroughFrame {
+    #[instructor(bitfield(u8))]
+    #[instructor(bits(7..8))]
+    pub state: PassThroughState,
+    #[instructor(bits(0..7))]
+    pub op: PassThroughOp,
+    pub data_len: u8,
+}
+
 #[derive(Copy, Clone, Instruct, Exstruct)]
 struct SubunitHeader {
     #[instructor(bitfield(u8))]

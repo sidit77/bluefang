@@ -1,12 +1,14 @@
 use std::collections::BTreeSet;
+use std::io::BufRead;
 use std::sync::Arc;
 use bytes::{Bytes, BytesMut};
 use instructor::{BigEndian, Buffer, BufferMut, Exstruct, Instruct};
 use instructor::utils::u24;
 use parking_lot::Mutex;
-use tokio::spawn;
+use tokio::{select, spawn};
+use tokio::sync::mpsc::Receiver;
 use tracing::{info, trace, warn};
-use crate::avc::{CommandCode, Frame, Opcode, Subunit, SubunitType};
+use crate::avc::{CommandCode, Frame, Opcode, PassThroughFrame, PassThroughOp, PassThroughState, Subunit, SubunitType};
 use crate::avctp::{Avctp, Message, MessageType};
 use crate::avrcp::sdp::REMOTE_CONTROL_SERVICE;
 use crate::{ensure, hci};
@@ -18,6 +20,25 @@ use crate::l2cap::{AVCTP_PSM, ProtocolDelegate, ProtocolHandler, ProtocolHandler
 pub mod sdp;
 mod packets;
 mod error;
+
+enum PlayerCommand {
+    Play,
+    Pause
+}
+
+fn command_reader() -> Receiver<PlayerCommand> {
+    let (tx, rx) = tokio::sync::mpsc::channel(10);
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(std::io::stdin()).lines() {
+            match line.expect("Failed to read line").to_lowercase().as_str() {
+                "play" => tx.blocking_send(PlayerCommand::Play).unwrap(),
+                "pause" => tx.blocking_send(PlayerCommand::Pause).unwrap(),
+                _ => continue,
+            }
+        }
+    });
+    rx
+}
 
 #[derive(Default)]
 pub struct AvrcpBuilder;
@@ -59,6 +80,8 @@ impl Avrcp {
                     command_assembler: Default::default(),
                     response_assembler: Default::default(),
                     volume: Default::default(),
+                    next_transaction: 0,
+                    player_commands: command_reader(),
                 };
                 state.run().await.unwrap_or_else(|err| {
                     warn!("Error running avctp: {:?}", err);
@@ -78,21 +101,42 @@ struct State {
     response_assembler: CommandAssembler,
 
     volume: Volume,
+
+    next_transaction: u8,
+
+    player_commands: Receiver<PlayerCommand>
 }
 
 impl State {
     async fn run(&mut self) -> Result<(), hci::Error> {
-        while let Some(mut packet) = self.avctp.read().await {
-            let transaction_label = packet.transaction_label;
-            if let Ok(frame) = packet.data.read_be::<Frame>() {
-                let payload = packet.data.clone();
-                if let Err(AvcError::NotImplemented) = self.process_message(frame, packet) {
-                    if !frame.ctype.is_response() {
-                        self.send_avc(transaction_label, Frame { ctype: CommandCode::NotImplemented, ..frame }, payload);
-                    } else {
-                        warn!("Failed to handle response: {:?}", frame);
+        loop {
+            select! {
+                Some(mut packet) = self.avctp.read() => {
+                    let transaction_label = packet.transaction_label;
+                    if let Ok(frame) = packet.data.read_be::<Frame>() {
+                        let payload = packet.data.clone();
+                        if let Err(AvcError::NotImplemented) = self.process_message(frame, packet) {
+                            if !frame.ctype.is_response() {
+                                self.send_avc(transaction_label, Frame { ctype: CommandCode::NotImplemented, ..frame }, payload);
+                            } else {
+                                warn!("Failed to handle response: {:?}", frame);
+                            }
+                        }
                     }
-                }
+                },
+                Some(cmd) = self.player_commands.recv() => {
+                    match cmd {
+                        PlayerCommand::Play => {
+                            self.send_pass_through(PassThroughOp::Play, PassThroughState::Pressed);
+                            self.send_pass_through(PassThroughOp::Play, PassThroughState::Released);
+                        },
+                        PlayerCommand::Pause => {
+                            self.send_pass_through(PassThroughOp::Pause, PassThroughState::Pressed);
+                            self.send_pass_through(PassThroughOp::Pause, PassThroughState::Released);
+                        }
+                    }
+                },
+                else => break
             }
         }
         Ok(())
@@ -142,10 +186,15 @@ impl State {
                 }, (page, PANEL, [0xffu8; 3]));
                 Ok(())
             }
-            // TODO Support pass-through frames
-            //Opcode::PassThrough => {
-            //    Ok(())
-            //}
+            Opcode::PassThrough => {
+                ensure!(frame.subunit == PANEL, AvcError::NotImplemented, "Unsupported subunit: {:?}", frame.subunit);
+                ensure!(matches!(frame.ctype, CommandCode::Accepted | CommandCode::Rejected | CommandCode::NotImplemented),
+                    AvcError::NotImplemented, "Unsupported command type: {:?}", frame.ctype);
+                let ptf: PassThroughFrame = message.data.read_be()?;
+                info!("Received pass-through frame: {:?}", ptf);
+
+                Ok(())
+            }
             code => {
                 warn!("Unsupported opcode: {:?}", code);
                 Err(AvcError::NotImplemented)
@@ -186,6 +235,23 @@ impl State {
         });
     }
 
+    fn get_transaction_label(&mut self) -> u8 {
+        let next = self.next_transaction;
+        self.next_transaction = (self.next_transaction + 1) % 16;
+        next
+    }
+
+    fn send_pass_through(&mut self, op: PassThroughOp, state: PassThroughState) {
+        let tl = self.get_transaction_label();
+        self.send_avc(tl,
+            Frame {
+                ctype: CommandCode::Control,
+                subunit: PANEL,
+                opcode: Opcode::PassThrough,
+            },
+            PassThroughFrame { op, state, data_len: 0 }
+        )
+    }
 
     fn process_command(&mut self, transaction: u8, _cmd: CommandCode, pdu: Pdu, mut parameters: Bytes) -> Result<(), ErrorCode> {
         match pdu {
