@@ -7,7 +7,7 @@ use instructor::utils::Length;
 use nusb::transfer::{ControlOut, ControlType, Recipient, RequestBuffer, TransferError};
 use tokio::sync::mpsc::{UnboundedSender as MpscSender, UnboundedReceiver as MpscReceiver};
 use tokio::sync::oneshot::Sender as OneshotSender;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, warn};
 use crate::hci::{Error, Opcode};
 use crate::hci::btsnoop::{LogWriter, PacketType};
 use crate::hci::consts::{EventCode, Status};

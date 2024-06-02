@@ -18,7 +18,7 @@ use nusb::transfer::TransferError;
 use parking_lot::Mutex;
 use tokio::spawn;
 use tokio::task::JoinHandle;
-use tracing::{debug, error, trace};
+use tracing::{debug, error};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender as MpscSender};
 use tokio::time::sleep;
 use crate::host::usb::UsbHost;

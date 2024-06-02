@@ -1,6 +1,8 @@
+use instructor::{Exstruct, Instruct};
 
 #[allow(dead_code)]
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Instruct, Exstruct)]
+#[repr(u8)]
 pub enum ErrorCode {
     InvalidCommand = 0x00,
     InvalidParameter = 0x01,
@@ -33,20 +35,22 @@ impl From<instructor::Error> for ErrorCode {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum Error2 {
+pub enum AvcError {
     NotImplemented,
-    Parsing(instructor::Error),
-    Avrcp(ErrorCode),
+    //Parsing(instructor::Error),
+    //Avrcp(ErrorCode),
 }
 
-impl From<instructor::Error> for Error2 {
-    fn from(value: instructor::Error) -> Self {
-        Self::Parsing(value)
+impl From<instructor::Error> for AvcError {
+    fn from(_value: instructor::Error) -> Self {
+        //Self::Parsing(value)
+        // idk
+        Self::NotImplemented
     }
 }
 
-impl From<ErrorCode> for Error2 {
-    fn from(value: ErrorCode) -> Self {
-        Self::Avrcp(value)
-    }
-}
+//impl From<ErrorCode> for AvcError {
+//    fn from(value: ErrorCode) -> Self {
+//        Self::Avrcp(value)
+//    }
+//}

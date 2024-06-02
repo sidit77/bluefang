@@ -1,16 +1,16 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use instructor::{BigEndian, Buffer, BufferMut, Exstruct, Instruct};
 use instructor::utils::u24;
 use parking_lot::Mutex;
 use tokio::spawn;
-use tracing::{info, trace, warn};
+use tracing::{error, info, trace, warn};
 use crate::avc::{CommandCode, Frame, Opcode};
 use crate::avctp::{Avctp, Message, MessageType};
 use crate::avrcp::sdp::REMOTE_CONTROL_SERVICE;
 use crate::{ensure, hci};
-use crate::avrcp::error::{Error2, ErrorCode};
+use crate::avrcp::error::{AvcError, ErrorCode};
 use crate::avrcp::packets::{BLUETOOTH_SIG_COMPANY_ID, Command, CommandAssembler, Event, fragment_command, PANEL, Pdu};
 use crate::l2cap::channel::Channel;
 use crate::l2cap::{AVCTP_PSM, ProtocolDelegate, ProtocolHandler, ProtocolHandlerProvider};
@@ -82,28 +82,38 @@ struct State {
 
 impl State {
     async fn run(&mut self) -> Result<(), hci::Error> {
-        while let Some(packet) = self.avctp.read().await {
-            self.process_message(packet)
-                .unwrap_or_else(|err| warn!("Error processing message: {:?}", err));
+        while let Some(mut packet) = self.avctp.read().await {
+            let transaction_label = packet.transaction_label;
+            if let Ok(frame) = packet.data.read_be::<Frame>() {
+                let payload = packet.data.clone();
+                if let Err(AvcError::NotImplemented) = self.process_message(frame, packet) {
+                    if !frame.ctype.is_response() {
+                        self.send_avc(transaction_label, Frame { ctype: CommandCode::NotImplemented, ..frame }, payload);
+                    } else {
+                        error!("Failed to handle response: {:?}", frame);
+                    }
+                }
+            }
         }
         Ok(())
     }
 
-    fn process_message(&mut self, mut message: Message) -> Result<(), Error2> {
-        let avc_frame: Frame = message.data.read()?;
-        ensure!(avc_frame.subunit == PANEL, Error2::NotImplemented, "Unsupported subunit: {:?}", avc_frame.subunit);
-        match avc_frame.opcode {
+    fn process_message(&mut self, frame: Frame, mut message: Message) -> Result<(), AvcError> {
+        ensure!(frame.subunit == PANEL, AvcError::NotImplemented, "Unsupported subunit: {:?}", frame.subunit);
+        match frame.opcode {
             Opcode::VendorDependent => {
                 let company_id: u24 = message.data.read_be::<u24>()?;
-                ensure!(company_id == BLUETOOTH_SIG_COMPANY_ID, Error2::NotImplemented, "Unsupported company id: {:#06x}", company_id);
-                if avc_frame.ctype.is_response() {
+                ensure!(company_id == BLUETOOTH_SIG_COMPANY_ID, AvcError::NotImplemented, "Unsupported company id: {:#06x}", company_id);
+                if frame.ctype.is_response() {
                     if let Some(Command { pdu, parameters }) = self.response_assembler.process_msg(message.data)? {
                         //self.process_command(message.transaction_label, avc_frame.ctype, pdu, parameters)?;
                         info!("Received response: {:?} ({} bytes)", pdu, parameters.len());
                     }
                 } else {
                     if let Some(Command { pdu, parameters }) = self.command_assembler.process_msg(message.data)? {
-                        self.process_command(message.transaction_label, avc_frame.ctype, pdu, parameters)?;
+                        if let Err(err) = self.process_command(message.transaction_label, frame.ctype, pdu, parameters) {
+                            self.send_avrcp(message.transaction_label, CommandCode::Rejected, pdu, err);
+                        }
                     }
                 }
 
@@ -115,12 +125,12 @@ impl State {
             //}
             code => {
                 warn!("Unsupported opcode: {:?}", code);
-                Err(Error2::NotImplemented)
+                Err(AvcError::NotImplemented)
             }
         }
     }
 
-    fn send_command<I: Instruct<BigEndian>>(&mut self, transaction_label: u8, cmd: CommandCode, pdu: Pdu, parameters: I) {
+    fn send_avrcp<I: Instruct<BigEndian>>(&mut self, transaction_label: u8, cmd: CommandCode, pdu: Pdu, parameters: I) {
         fragment_command(cmd, pdu, parameters, |data| {
             self.avctp.send_msg(Message {
                 transaction_label,
@@ -136,6 +146,24 @@ impl State {
         });
     }
 
+    fn send_avc<I: Instruct<BigEndian>>(&mut self, transaction_label: u8, frame: Frame, parameters: I) {
+        let mut buffer = BytesMut::new();
+        buffer.write(&frame);
+        buffer.write(&parameters);
+        self.avctp.send_msg(Message {
+            transaction_label,
+            profile_id: REMOTE_CONTROL_SERVICE,
+            message_type: match frame.ctype.is_response() {
+                true => MessageType::Response,
+                false => MessageType::Command,
+            },
+            data: buffer.freeze()
+        }).unwrap_or_else(|err| {
+            warn!("Error sending command: {:?}", err);
+        });
+    }
+
+
     fn process_command(&mut self, transaction: u8, _cmd: CommandCode, pdu: Pdu, mut parameters: Bytes) -> Result<(), ErrorCode> {
         match pdu {
             // ([AVRCP] Section 6.7.2)
@@ -146,7 +174,7 @@ impl State {
                 parameters.finish()?;
                 ensure!(event == Event::VolumeChanged, ErrorCode::InvalidParameter);
                 // ([AVRCP] Section 6.13.3)
-                self.send_command(transaction, CommandCode::Interim, pdu, (event, self.volume));
+                self.send_avrcp(transaction, CommandCode::Interim, pdu, (event, self.volume));
                 Ok(())
             },
             // ([AVRCP] Section 6.13.2)
@@ -154,7 +182,7 @@ impl State {
                 self.volume = parameters.read_be()?;
                 parameters.finish()?;
                 info!("Volume set to: {}", self.volume.0);
-                self.send_command(transaction, CommandCode::Accepted, pdu, self.volume);
+                self.send_avrcp(transaction, CommandCode::Accepted, pdu, self.volume);
                 Ok(())
             },
             _ => {
