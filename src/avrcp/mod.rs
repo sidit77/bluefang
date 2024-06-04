@@ -1,5 +1,4 @@
 use std::collections::BTreeSet;
-use std::io::BufRead;
 use std::sync::Arc;
 use bytes::{Bytes, BytesMut};
 use instructor::{BigEndian, Buffer, BufferMut, Exstruct, Instruct};
@@ -20,40 +19,27 @@ use crate::l2cap::{AVCTP_PSM, ProtocolDelegate, ProtocolHandler, ProtocolHandler
 pub mod sdp;
 mod packets;
 mod error;
+mod session;
 
-enum PlayerCommand {
-    Play,
-    Pause
-}
+pub use session::{AvrcpSession, AvrcpCommand};
 
-fn command_reader() -> Receiver<PlayerCommand> {
-    let (tx, rx) = tokio::sync::mpsc::channel(10);
-    std::thread::spawn(move || {
-        for line in std::io::BufReader::new(std::io::stdin()).lines() {
-            match line.expect("Failed to read line").to_lowercase().as_str() {
-                "play" => tx.blocking_send(PlayerCommand::Play).unwrap(),
-                "pause" => tx.blocking_send(PlayerCommand::Pause).unwrap(),
-                _ => continue,
-            }
-        }
-    });
-    rx
-}
 
 #[derive(Default)]
 pub struct AvrcpBuilder;
 
 impl AvrcpBuilder {
-    pub fn build(self) -> Avrcp {
+    pub fn build<F: FnMut(AvrcpSession) + Send + 'static>(self, handler: F) -> Avrcp {
         Avrcp {
-            existing_connections: Arc::new(Mutex::new(BTreeSet::new()))
+            existing_connections: Arc::new(Mutex::new(BTreeSet::new())),
+            session_handler: Arc::new(Mutex::new(handler)),
         }
     }
 }
 
 #[derive(Clone)]
 pub struct Avrcp {
-    existing_connections: Arc<Mutex<BTreeSet<u16>>>
+    existing_connections: Arc<Mutex<BTreeSet<u16>>>,
+    session_handler: Arc<Mutex<dyn FnMut(AvrcpSession) + Send>>
 }
 
 impl ProtocolHandlerProvider for Avrcp {
@@ -70,19 +56,22 @@ impl Avrcp {
         let success = self.existing_connections.lock().insert(handle);
         if success {
             let existing_connections = self.existing_connections.clone();
+            let session_handler = self.session_handler.clone();
             spawn(async move {
                 if let Err(err) = channel.configure().await {
                     warn!("Error configuring channel: {:?}", err);
                     return;
                 }
+                let (tx, rx) = tokio::sync::mpsc::channel(16);
                 let mut state = State {
                     avctp: Avctp::new(channel, [REMOTE_CONTROL_SERVICE]),
                     command_assembler: Default::default(),
                     response_assembler: Default::default(),
                     volume: Default::default(),
                     next_transaction: 0,
-                    player_commands: command_reader(),
+                    player_commands: rx,
                 };
+                session_handler.lock()(AvrcpSession { player_commands: tx });
                 state.run().await.unwrap_or_else(|err| {
                     warn!("Error running avctp: {:?}", err);
                 });
@@ -104,7 +93,7 @@ struct State {
 
     next_transaction: u8,
 
-    player_commands: Receiver<PlayerCommand>
+    player_commands: Receiver<AvrcpCommand>
 }
 
 impl State {
@@ -126,14 +115,7 @@ impl State {
                 },
                 Some(cmd) = self.player_commands.recv() => {
                     match cmd {
-                        PlayerCommand::Play => {
-                            self.send_pass_through(PassThroughOp::Play, PassThroughState::Pressed);
-                            self.send_pass_through(PassThroughOp::Play, PassThroughState::Released);
-                        },
-                        PlayerCommand::Pause => {
-                            self.send_pass_through(PassThroughOp::Pause, PassThroughState::Pressed);
-                            self.send_pass_through(PassThroughOp::Pause, PassThroughState::Released);
-                        }
+                        AvrcpCommand::PassThrough(op, state) => self.send_pass_through(op, state),
                     }
                 },
                 else => break
@@ -281,6 +263,8 @@ impl State {
         }
     }
 }
+
+
 
 #[derive(Default, Debug, Copy, Clone, PartialEq)]
 pub struct Volume(pub f32);

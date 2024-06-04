@@ -25,4 +25,3 @@ sbc-rs = { path = "../sbc-rs" }
 rubato = "0.15.0"
 ringbuf = "0.4.1"
 anyhow = "1.0.82"
-futures-lite = "2.3.0"

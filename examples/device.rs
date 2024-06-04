@@ -8,13 +8,13 @@ use anyhow::Context;
 use bytes::{Bytes};
 use cpal::{default_host, SampleFormat, Stream, StreamConfig};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use futures_lite::FutureExt;
 use ringbuf::{HeapProd, HeapRb};
 use ringbuf::consumer::Consumer;
 use ringbuf::producer::Producer;
 use ringbuf::traits::{Split};
 use rubato::{FastFixedIn, PolynomialDegree, Resampler};
 use sbc_rs::Decoder;
+use tokio::spawn;
 use tokio::sync::mpsc::Receiver;
 use tracing::{error, info, trace};
 use tracing_subscriber::EnvFilter;
@@ -27,7 +27,7 @@ use bluefang::avdtp::{AvdtpBuilder, LocalEndpoint, StreamHandler};
 use bluefang::avdtp::capabilities::{Capability, MediaCodecCapability};
 use bluefang::avdtp::error::ErrorCode;
 use bluefang::avdtp::packets::{MediaType, StreamEndpointType};
-use bluefang::avrcp::{AvrcpBuilder};
+use bluefang::avrcp::{AvrcpBuilder, AvrcpSession};
 use bluefang::avrcp::sdp::{AvrcpControllerServiceRecord, AvrcpTargetServiceRecord};
 
 use bluefang::firmware::RealTekFirmwareLoader;
@@ -77,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
                 .with_record(AvrcpTargetServiceRecord::new(0x00010003))
                 .build())
             .with_protocol(AvrcpBuilder::default()
-                .build())
+                .build(avrcp_session_handler))
             .with_protocol(AvdtpBuilder::default()
                 .with_endpoint(LocalEndpoint {
                     media_type: MediaType::Audio,
@@ -105,6 +105,17 @@ async fn main() -> anyhow::Result<()> {
 
 }
 
+fn avrcp_session_handler(session: AvrcpSession) {
+    let mut commands = command_reader();
+    spawn(async move {
+        while let Some(command) = commands.recv().await {
+            match command {
+                PlayerCommand::Play => session.play().await,
+                PlayerCommand::Pause => session.pause().await,
+            }
+        }
+    });
+}
 
 struct SbcStreamHandler {
     audio_session: AudioSession,
@@ -270,3 +281,25 @@ impl AudioSession {
 
 }
 
+enum PlayerCommand {
+    Play,
+    Pause
+}
+
+fn command_reader() -> Receiver<PlayerCommand> {
+    static IN_USE: AtomicBool = AtomicBool::new(false);
+    assert!(!IN_USE.swap(true, std::sync::atomic::Ordering::SeqCst), "command_reader must be called only once");
+    let (tx, rx) = tokio::sync::mpsc::channel(10);
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        for line in std::io::BufReader::new(stdin.lock()).lines() {
+            match line.expect("Failed to read line").to_lowercase().as_str() {
+                "play" => tx.blocking_send(PlayerCommand::Play).unwrap(),
+                "pause" => tx.blocking_send(PlayerCommand::Pause).unwrap(),
+                _ => continue,
+            }
+        }
+        IN_USE.store(false, std::sync::atomic::Ordering::SeqCst);
+    });
+    rx
+}
