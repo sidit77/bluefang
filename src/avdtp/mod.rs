@@ -19,7 +19,7 @@ use crate::avdtp::packets::{MessageType, ServiceCategory, SignalChannelExt, Sign
 use crate::hci::Error;
 use crate::l2cap::channel::Channel;
 use crate::l2cap::{AVDTP_PSM, ProtocolHandler};
-use crate::utils::{MutexCell, select_all, stall_if_none};
+use crate::utils::{MutexCell, OptionFuture, select_all};
 
 pub use endpoint::{StreamHandler, LocalEndpoint};
 use crate::avdtp::capabilities::Capability;
@@ -77,7 +77,7 @@ impl ProtocolHandler for Avdtp {
                     }
                     let mut session = AvdtpSession {
                         channel_sender: pending_stream,
-                        channel_receiver: None,
+                        channel_receiver: OptionFuture::never(),
                         local_endpoints,
                         streams: Vec::new(),
                     };
@@ -109,7 +109,7 @@ impl ProtocolHandler for Avdtp {
 
 struct AvdtpSession {
     channel_sender: Arc<ChannelSender>,
-    channel_receiver: Option<Receiver<Channel>>,
+    channel_receiver: OptionFuture<Receiver<Channel>>,
     local_endpoints: Arc<[LocalEndpoint]>,
     streams: Vec<Stream>,
 }
@@ -138,14 +138,13 @@ impl AvdtpSession {
                     },
                     None => break,
                 },
-                res = stall_if_none(&mut self.channel_receiver) => {
+                res = &mut self.channel_receiver => {
                     let channel = res.expect("Channel receiver closed");
                     self.streams
                         .iter_mut()
                         .find(|stream| stream.is_opening())
                         .map(|stream| stream.set_channel(channel))
                         .unwrap_or_else(|| warn!("No stream waiting for channel"));
-                    self.channel_receiver = None;
                 }
             }
         }
@@ -247,7 +246,7 @@ impl AvdtpSession {
                 stream.set_to_opening()?;
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 self.channel_sender.set(Some(tx));
-                self.channel_receiver = Some(rx);
+                self.channel_receiver.set(rx);
                 Ok(())
             }),
             // ([AVDTP] Section 8.13).

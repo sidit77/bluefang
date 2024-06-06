@@ -1,5 +1,9 @@
+use bytes::Bytes;
+use instructor::{Buffer};
 use tokio::sync::mpsc::Sender;
-use crate::avc::{PassThroughOp, PassThroughState};
+use tokio::sync::oneshot::Sender as OneshotSender;
+use crate::avc::{PassThroughFrame, PassThroughOp, PassThroughState};
+use crate::ensure;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AvrcpCommand {
@@ -7,21 +11,48 @@ pub enum AvrcpCommand {
 }
 
 pub struct AvrcpSession {
-    pub(super) player_commands: Sender<AvrcpCommand>
+    pub(super) player_commands: Sender<(AvrcpCommand, OneshotSender<Result<Bytes, SessionError>>)>
 }
 
 impl AvrcpSession {
-    async fn send_action(&self, op: PassThroughOp) {
-        self.player_commands.send(AvrcpCommand::PassThrough(op, PassThroughState::Pressed)).await.unwrap();
-        self.player_commands.send(AvrcpCommand::PassThrough(op, PassThroughState::Released)).await.unwrap();
+    async fn send_cmd(&self, cmd: AvrcpCommand) -> Result<Bytes, SessionError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.player_commands.send((cmd, tx)).await.map_err(|_| SessionError::SessionClosed)?;
+        rx.await.map_err(|_| SessionError::SessionClosed)?
     }
 
-    pub async fn play(&self) {
-        self.send_action(PassThroughOp::Play).await;
+    async fn send_action(&self, op: PassThroughOp, state: PassThroughState) -> Result<(), SessionError> {
+        let mut result = self.send_cmd(AvrcpCommand::PassThrough(op, state)).await?;
+        let frame: PassThroughFrame = result.read_be()?;
+        ensure!(frame.op == op && frame.state == state, instructor::Error::InvalidValue);
+        Ok(())
     }
 
-    pub async fn pause(&self) {
-        self.send_action(PassThroughOp::Pause).await;
+    pub async fn play(&self) -> Result<(), SessionError> {
+        self.send_action(PassThroughOp::Play, PassThroughState::Pressed).await?;
+        self.send_action(PassThroughOp::Play, PassThroughState::Released).await?;
+        Ok(())
     }
 
+    pub async fn pause(&self) -> Result<(), SessionError> {
+        self.send_action(PassThroughOp::Pause, PassThroughState::Pressed).await?;
+        self.send_action(PassThroughOp::Pause, PassThroughState::Released).await?;
+        Ok(())
+    }
+
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum SessionError {
+    SessionClosed,
+    NoTransactionIdAvailable,
+    NotImplemented,
+    Rejected,
+    InvalidReturnData(instructor::Error)
+}
+
+impl From<instructor::Error> for SessionError {
+    fn from(value: instructor::Error) -> Self {
+        Self::InvalidReturnData(value)
+    }
 }

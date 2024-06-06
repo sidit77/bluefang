@@ -4,10 +4,11 @@ use bytes::{Bytes, BytesMut};
 use instructor::{BigEndian, Buffer, BufferMut, Exstruct, Instruct};
 use instructor::utils::u24;
 use parking_lot::Mutex;
-use tokio::{select, spawn};
+use tokio::{spawn};
 use tokio::sync::mpsc::Receiver;
+use tokio::sync::oneshot::{Sender as OneshotSender};
 use tracing::{info, trace, warn};
-use crate::avc::{CommandCode, Frame, Opcode, PassThroughFrame, PassThroughOp, PassThroughState, Subunit, SubunitType};
+use crate::avc::{CommandCode, Frame, Opcode, PassThroughFrame, Subunit, SubunitType};
 use crate::avctp::{Avctp, Message, MessageType};
 use crate::avrcp::sdp::REMOTE_CONTROL_SERVICE;
 use crate::{ensure, hci};
@@ -22,6 +23,8 @@ mod error;
 mod session;
 
 pub use session::{AvrcpSession, AvrcpCommand};
+use crate::avrcp::session::SessionError;
+use crate::utils::{Either2, select2};
 
 
 #[derive(Default)]
@@ -68,8 +71,8 @@ impl Avrcp {
                     command_assembler: Default::default(),
                     response_assembler: Default::default(),
                     volume: Default::default(),
-                    next_transaction: 0,
                     player_commands: rx,
+                    outstanding_transactions: Default::default(),
                 };
                 session_handler.lock()(AvrcpSession { player_commands: tx });
                 state.run().await.unwrap_or_else(|err| {
@@ -91,16 +94,15 @@ struct State {
 
     volume: Volume,
 
-    next_transaction: u8,
-
-    player_commands: Receiver<AvrcpCommand>
+    player_commands: Receiver<(AvrcpCommand, OneshotSender<Result<Bytes, SessionError>>)>,
+    outstanding_transactions: [Option<(Opcode, OneshotSender<Result<Bytes, SessionError>>)>; 16]
 }
 
 impl State {
     async fn run(&mut self) -> Result<(), hci::Error> {
         loop {
-            select! {
-                Some(mut packet) = self.avctp.read() => {
+            match select2(self.avctp.read(), self.player_commands.recv()).await {
+                Either2::A(Some(mut packet)) => {
                     let transaction_label = packet.transaction_label;
                     if let Ok(frame) = packet.data.read_be::<Frame>() {
                         let payload = packet.data.clone();
@@ -113,12 +115,30 @@ impl State {
                         }
                     }
                 },
-                Some(cmd) = self.player_commands.recv() => {
+                Either2::B(Some((cmd, sender))) => {
+                    let Some(transaction) = self
+                        .outstanding_transactions
+                        .iter()
+                        .position(|x| x.is_none())
+                        else {
+                            let _ = sender.send(Err(SessionError::NoTransactionIdAvailable));
+                            continue;
+                        };
                     match cmd {
-                        AvrcpCommand::PassThrough(op, state) => self.send_pass_through(op, state),
+                        AvrcpCommand::PassThrough(op, state) => {
+                            self.send_avc(
+                                transaction as u8,
+                                Frame {
+                                    ctype: CommandCode::Control,
+                                    subunit: PANEL,
+                                    opcode: Opcode::PassThrough,
+                                },
+                                PassThroughFrame { op, state, data_len: 0 })
+                                .then(|| self.outstanding_transactions[transaction] = Some((Opcode::PassThrough, sender)));
+                        },
                     }
                 },
-                else => break
+                _ => break
             }
         }
         Ok(())
@@ -172,9 +192,18 @@ impl State {
                 ensure!(frame.subunit == PANEL, AvcError::NotImplemented, "Unsupported subunit: {:?}", frame.subunit);
                 ensure!(matches!(frame.ctype, CommandCode::Accepted | CommandCode::Rejected | CommandCode::NotImplemented),
                     AvcError::NotImplemented, "Unsupported command type: {:?}", frame.ctype);
-                let ptf: PassThroughFrame = message.data.read_be()?;
-                info!("Received pass-through frame: {:?}", ptf);
-
+                let transaction = &mut self.outstanding_transactions[message.transaction_label as usize];
+                if !matches!(transaction, Some((Opcode::PassThrough, _))) {
+                    warn!("Received pass-through response with no/wrong outstanding transaction: {:?} {:?}", message, transaction);
+                    return Ok(());
+                }
+                let (_, sender) = transaction.take().unwrap();
+                let _ = sender.send(match frame.ctype {
+                    CommandCode::Accepted => Ok(message.data),
+                    CommandCode::Rejected => Err(SessionError::Rejected),
+                    CommandCode::NotImplemented => Err(SessionError::NotImplemented),
+                    _ => unreachable!()
+                });
                 Ok(())
             }
             code => {
@@ -184,7 +213,7 @@ impl State {
         }
     }
 
-    fn send_avrcp<I: Instruct<BigEndian>>(&mut self, transaction_label: u8, cmd: CommandCode, pdu: Pdu, parameters: I) {
+    fn send_avrcp<I: Instruct<BigEndian>>(&mut self, transaction_label: u8, cmd: CommandCode, pdu: Pdu, parameters: I) -> bool {
         fragment_command(cmd, pdu, parameters, |data| {
             self.avctp.send_msg(Message {
                 transaction_label,
@@ -195,12 +224,10 @@ impl State {
                 },
                 data,
             })
-        }).unwrap_or_else(|err| {
-            warn!("Error sending command: {:?}", err);
-        });
+        }).map_err(|err| warn!("Error sending command: {:?}", err)).is_ok()
     }
 
-    fn send_avc<I: Instruct<BigEndian>>(&mut self, transaction_label: u8, frame: Frame, parameters: I) {
+    fn send_avc<I: Instruct<BigEndian>>(&mut self, transaction_label: u8, frame: Frame, parameters: I) -> bool {
         let mut buffer = BytesMut::new();
         buffer.write(&frame);
         buffer.write(&parameters);
@@ -212,27 +239,7 @@ impl State {
                 false => MessageType::Command,
             },
             data: buffer.freeze()
-        }).unwrap_or_else(|err| {
-            warn!("Error sending command: {:?}", err);
-        });
-    }
-
-    fn get_transaction_label(&mut self) -> u8 {
-        let next = self.next_transaction;
-        self.next_transaction = (self.next_transaction + 1) % 16;
-        next
-    }
-
-    fn send_pass_through(&mut self, op: PassThroughOp, state: PassThroughState) {
-        let tl = self.get_transaction_label();
-        self.send_avc(tl,
-            Frame {
-                ctype: CommandCode::Control,
-                subunit: PANEL,
-                opcode: Opcode::PassThrough,
-            },
-            PassThroughFrame { op, state, data_len: 0 }
-        )
+        }).map_err(|err| warn!("Error sending command: {:?}", err)).is_ok()
     }
 
     fn process_command(&mut self, transaction: u8, _cmd: CommandCode, pdu: Pdu, mut parameters: Bytes) -> Result<(), ErrorCode> {

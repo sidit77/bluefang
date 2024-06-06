@@ -16,7 +16,7 @@ use rubato::{FastFixedIn, PolynomialDegree, Resampler};
 use sbc_rs::Decoder;
 use tokio::spawn;
 use tokio::sync::mpsc::Receiver;
-use tracing::{error, info, trace};
+use tracing::{error, info, trace, warn};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -112,7 +112,7 @@ fn avrcp_session_handler(session: AvrcpSession) {
             match command {
                 PlayerCommand::Play => session.play().await,
                 PlayerCommand::Pause => session.pause().await,
-            }
+            }.unwrap_or_else(|err| warn!("Failed to send command: {:?}", err));
         }
     });
 }
