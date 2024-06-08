@@ -7,6 +7,9 @@ use crate::avc::{CommandCode, Frame, Opcode, Subunit, SubunitType};
 pub const PANEL: Subunit = Subunit { ty: SubunitType::Panel, id: 0 };
 pub const BLUETOOTH_SIG_COMPANY_ID: u24 = u24::new(0x001958);
 
+pub const COMPANY_ID_CAPABILITY: u8 = 0x02;
+pub const EVENTS_SUPPORTED_CAPABILITY: u8 = 0x03;
+
 // ([AVRCP] Section 6.3)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Instruct, Exstruct)]
 #[instructor(endian = "big")]
@@ -72,7 +75,7 @@ pub enum Pdu {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Instruct, Exstruct)]
 #[repr(u8)]
 pub enum Event {
-    PlaybackStatusChanged = 0x00,
+    PlaybackStatusChanged = 0x01,
     TrackChanged = 0x02,
     TrackReachedEnd = 0x03,
     TrackReachedStart = 0x04,

@@ -108,6 +108,7 @@ async fn main() -> anyhow::Result<()> {
 fn avrcp_session_handler(session: AvrcpSession) {
     let mut commands = command_reader();
     spawn(async move {
+        info!("Supported Events: {:?}", session.get_supported_events().await.unwrap());
         while let Some(command) = commands.recv().await {
             match command {
                 PlayerCommand::Play => session.play().await,

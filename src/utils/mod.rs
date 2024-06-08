@@ -7,7 +7,7 @@ use std::fmt::{Debug, Formatter};
 use tokio::sync::mpsc::UnboundedSender;
 
 pub use iter::IteratorExt;
-pub use bytes::SliceExt;
+pub use bytes::{SliceExt, to_bytes_be};
 pub use mutex_cell::MutexCell;
 pub use futures::*;
 

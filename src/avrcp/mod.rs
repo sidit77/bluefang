@@ -7,13 +7,13 @@ use parking_lot::Mutex;
 use tokio::{spawn};
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::oneshot::{Sender as OneshotSender};
-use tracing::{info, trace, warn};
+use tracing::{error, info, trace, warn};
 use crate::avc::{CommandCode, Frame, Opcode, PassThroughFrame, Subunit, SubunitType};
 use crate::avctp::{Avctp, Message, MessageType};
 use crate::avrcp::sdp::REMOTE_CONTROL_SERVICE;
-use crate::{ensure, hci};
+use crate::{ensure, hci, log_assert};
 use crate::avrcp::error::{AvcError, ErrorCode};
-use crate::avrcp::packets::{BLUETOOTH_SIG_COMPANY_ID, Command, CommandAssembler, Event, fragment_command, PANEL, Pdu};
+use crate::avrcp::packets::{BLUETOOTH_SIG_COMPANY_ID, Command, CommandAssembler, COMPANY_ID_CAPABILITY, Event, EVENTS_SUPPORTED_CAPABILITY, fragment_command, PANEL, Pdu};
 use crate::l2cap::channel::Channel;
 use crate::l2cap::{AVCTP_PSM, ProtocolDelegate, ProtocolHandler, ProtocolHandlerProvider};
 
@@ -70,7 +70,7 @@ impl Avrcp {
                     avctp: Avctp::new(channel, [REMOTE_CONTROL_SERVICE]),
                     command_assembler: Default::default(),
                     response_assembler: Default::default(),
-                    volume: Default::default(),
+                    volume: Volume(1.0),
                     player_commands: rx,
                     outstanding_transactions: Default::default(),
                 };
@@ -85,7 +85,34 @@ impl Avrcp {
     }
 }
 
+#[derive(Default, Debug)]
+enum TransactionState {
+    #[default]
+    Empty,
+    PendingPassThrough(OneshotSender<Result<Bytes, SessionError>>),
+    PendingVendorDependent(CommandCode, OneshotSender<Result<Bytes, SessionError>>),
+    WaitingForChange
+}
 
+impl TransactionState {
+    pub fn is_free(&self) -> bool {
+        matches!(self, TransactionState::Empty)
+    }
+
+    pub fn take_sender(&mut self, waiting: bool) -> OneshotSender<Result<Bytes, SessionError>> {
+        let prev = std::mem::take(self);
+        if waiting {
+            debug_assert!(matches!(prev, TransactionState::PendingVendorDependent(CommandCode::Notify, _)));
+            *self = TransactionState::WaitingForChange;
+        }
+        match prev {
+            TransactionState::PendingPassThrough(sender) => sender,
+            TransactionState::PendingVendorDependent(_, sender) => sender,
+            _ => unreachable!()
+        }
+    }
+
+}
 
 struct State {
     avctp: Avctp,
@@ -95,7 +122,7 @@ struct State {
     volume: Volume,
 
     player_commands: Receiver<(AvrcpCommand, OneshotSender<Result<Bytes, SessionError>>)>,
-    outstanding_transactions: [Option<(Opcode, OneshotSender<Result<Bytes, SessionError>>)>; 16]
+    outstanding_transactions: [TransactionState; 16]
 }
 
 impl State {
@@ -119,7 +146,7 @@ impl State {
                     let Some(transaction) = self
                         .outstanding_transactions
                         .iter()
-                        .position(|x| x.is_none())
+                        .position(|x| x.is_free())
                         else {
                             let _ = sender.send(Err(SessionError::NoTransactionIdAvailable));
                             continue;
@@ -134,8 +161,16 @@ impl State {
                                     opcode: Opcode::PassThrough,
                                 },
                                 PassThroughFrame { op, state, data_len: 0 })
-                                .then(|| self.outstanding_transactions[transaction] = Some((Opcode::PassThrough, sender)));
+                                .then(|| self.outstanding_transactions[transaction] = TransactionState::PendingPassThrough(sender));
                         },
+                        AvrcpCommand::VendorSpecific(cmd, pdu, params) => {
+                            self.send_avrcp(
+                                transaction as u8,
+                                cmd,
+                                pdu,
+                                params)
+                                .then(|| self.outstanding_transactions[transaction] = TransactionState::PendingVendorDependent(cmd, sender));
+                        }
                     }
                 },
                 _ => break
@@ -152,8 +187,56 @@ impl State {
                 ensure!(company_id == BLUETOOTH_SIG_COMPANY_ID, AvcError::NotImplemented, "Unsupported company id: {:#06x}", company_id);
                 if frame.ctype.is_response() {
                     if let Some(Command { pdu, parameters }) = self.response_assembler.process_msg(message.data)? {
-                        //self.process_command(message.transaction_label, avc_frame.ctype, pdu, parameters)?;
-                        info!("Received response: {:?} ({} bytes)", pdu, parameters.len());
+                        let transaction = &mut self.outstanding_transactions[message.transaction_label as usize];
+                        match transaction {
+                            TransactionState::PendingVendorDependent(CommandCode::Control, _) => {
+                                let reply = match frame.ctype {
+                                    CommandCode::NotImplemented => Err(SessionError::NotImplemented),
+                                    CommandCode::Accepted => Ok(parameters),
+                                    CommandCode::Rejected => Err(SessionError::Rejected),
+                                    CommandCode::Interim => return Ok(()),
+                                    _ => Err(SessionError::InvalidReturnData)
+                                };
+                                let _ = transaction.take_sender(false).send(reply);
+                            },
+                            TransactionState::PendingVendorDependent(CommandCode::Status, _) => {
+                                let reply = match frame.ctype {
+                                    CommandCode::NotImplemented => Err(SessionError::NotImplemented),
+                                    CommandCode::Implemented => Ok(parameters),
+                                    CommandCode::Rejected => Err(SessionError::Rejected),
+                                    CommandCode::InTransition => Err(SessionError::Busy),
+                                    _ => Err(SessionError::InvalidReturnData)
+                                };
+                                let _ = transaction.take_sender(false).send(reply);
+                            },
+                            TransactionState::PendingVendorDependent(CommandCode::Notify, _) => {
+                                let reply = match frame.ctype {
+                                    CommandCode::NotImplemented => Err(SessionError::NotImplemented),
+                                    CommandCode::Rejected => Err(SessionError::Rejected),
+                                    CommandCode::Interim => Ok(parameters),
+                                    CommandCode::Changed => {
+                                        warn!("Received changed response without interims response");
+                                        Err(SessionError::InvalidReturnData)
+                                    },
+                                    _ => Err(SessionError::InvalidReturnData)
+                                };
+                                let _ = transaction.take_sender(reply.is_ok()).send(reply);
+                            },
+                            TransactionState::PendingVendorDependent(code, _) => {
+                                error!("Received response for invalid command code: {:?}", code);
+                                *transaction = TransactionState::Empty;
+                            }
+                            TransactionState::WaitingForChange => {
+                                log_assert!(frame.ctype == CommandCode::Changed);
+                                *transaction = TransactionState::Empty;
+                            }
+                            _ => {
+                                warn!("Received vendor dependent response with no/wrong outstanding transaction: {:?} {:?} {:?}", transaction, pdu, frame.ctype);
+                                return Ok(());
+                            }
+                        }
+                    } else {
+                        //TODO send continue and continue abort responses
                     }
                 } else {
                     if let Some(Command { pdu, parameters }) = self.command_assembler.process_msg(message.data)? {
@@ -190,19 +273,16 @@ impl State {
             }
             Opcode::PassThrough => {
                 ensure!(frame.subunit == PANEL, AvcError::NotImplemented, "Unsupported subunit: {:?}", frame.subunit);
-                ensure!(matches!(frame.ctype, CommandCode::Accepted | CommandCode::Rejected | CommandCode::NotImplemented),
-                    AvcError::NotImplemented, "Unsupported command type: {:?}", frame.ctype);
                 let transaction = &mut self.outstanding_transactions[message.transaction_label as usize];
-                if !matches!(transaction, Some((Opcode::PassThrough, _))) {
+                if !matches!(transaction, TransactionState::PendingPassThrough(_)) {
                     warn!("Received pass-through response with no/wrong outstanding transaction: {:?} {:?}", message, transaction);
                     return Ok(());
                 }
-                let (_, sender) = transaction.take().unwrap();
-                let _ = sender.send(match frame.ctype {
+                let _ = transaction.take_sender(false).send(match frame.ctype {
                     CommandCode::Accepted => Ok(message.data),
                     CommandCode::Rejected => Err(SessionError::Rejected),
                     CommandCode::NotImplemented => Err(SessionError::NotImplemented),
-                    _ => unreachable!()
+                    _ => Err(SessionError::InvalidReturnData)
                 });
                 Ok(())
             }
@@ -244,6 +324,26 @@ impl State {
 
     fn process_command(&mut self, transaction: u8, _cmd: CommandCode, pdu: Pdu, mut parameters: Bytes) -> Result<(), ErrorCode> {
         match pdu {
+            // ([AVRCP] Section 6.4.1)
+            Pdu::GetCapabilities => {
+                let capability: u8 = parameters.read_be()?;
+                parameters.finish()?;
+                match capability {
+                    COMPANY_ID_CAPABILITY => {
+                        self.send_avrcp(transaction, CommandCode::Implemented, pdu, (COMPANY_ID_CAPABILITY, 1, BLUETOOTH_SIG_COMPANY_ID));
+                        Ok(())
+                    },
+                    EVENTS_SUPPORTED_CAPABILITY => {
+                        //TODO Support a second event type to conform to spec
+                        self.send_avrcp(transaction, CommandCode::Implemented, pdu, (EVENTS_SUPPORTED_CAPABILITY, 1, Event::VolumeChanged));
+                        Ok(())
+                    },
+                    _ => {
+                        warn!("Unsupported capability: {}", capability);
+                        Err(ErrorCode::InvalidParameter)
+                    }
+                }
+            },
             // ([AVRCP] Section 6.7.2)
             Pdu::RegisterNotification => {
                 // ensure!(cmd == CommandCode::Notify, ErrorCode::InvalidCommand);
