@@ -74,7 +74,7 @@ pub enum Pdu {
 // ([AVRCP] Section 28)
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Instruct, Exstruct)]
 #[repr(u8)]
-pub enum Event {
+pub enum EventId {
     PlaybackStatusChanged = 0x01,
     TrackChanged = 0x02,
     TrackReachedEnd = 0x03,
@@ -182,12 +182,12 @@ pub fn fragment_command<P, F, E>(cmd: CommandCode, pdu: Pdu, parameters: P, mut 
 mod tests {
     use bytes::Buf;
     use crate::avc::CommandCode;
-    use crate::avrcp::packets::{Event, fragment_command, Pdu};
+    use crate::avrcp::packets::{EventId, fragment_command, Pdu};
     use crate::avrcp::Volume;
 
     #[test]
     pub fn test_fragmentation() {
-        fragment_command(CommandCode::Interim, Pdu::RegisterNotification, (Event::VolumeChanged, Volume(0.0)), |data| {
+        fragment_command(CommandCode::Interim, Pdu::RegisterNotification, (EventId::VolumeChanged, Volume(0.0)), |data| {
             assert_eq!(&[0x0F, 0x48, 0x00, 0x00, 0x19, 0x58, 0x31, 0x00, 0x00, 0x02, 0x0D, 0x00], data.chunk());
             Ok::<(), ()>(())
         }).unwrap()

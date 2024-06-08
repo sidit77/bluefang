@@ -5,7 +5,7 @@ use instructor::{BigEndian, Buffer, BufferMut, Exstruct, Instruct};
 use instructor::utils::u24;
 use parking_lot::Mutex;
 use tokio::{spawn};
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::oneshot::{Sender as OneshotSender};
 use tracing::{error, info, trace, warn};
 use crate::avc::{CommandCode, Frame, Opcode, PassThroughFrame, Subunit, SubunitType};
@@ -13,18 +13,19 @@ use crate::avctp::{Avctp, Message, MessageType};
 use crate::avrcp::sdp::REMOTE_CONTROL_SERVICE;
 use crate::{ensure, hci, log_assert};
 use crate::avrcp::error::{AvcError, ErrorCode};
-use crate::avrcp::packets::{BLUETOOTH_SIG_COMPANY_ID, Command, CommandAssembler, COMPANY_ID_CAPABILITY, Event, EVENTS_SUPPORTED_CAPABILITY, fragment_command, PANEL, Pdu};
+use crate::avrcp::packets::{BLUETOOTH_SIG_COMPANY_ID, Command, CommandAssembler, COMPANY_ID_CAPABILITY, EventId, EVENTS_SUPPORTED_CAPABILITY, fragment_command, PANEL, Pdu};
 use crate::l2cap::channel::Channel;
 use crate::l2cap::{AVCTP_PSM, ProtocolDelegate, ProtocolHandler, ProtocolHandlerProvider};
+use crate::utils::{Either2, select2};
+use crate::avrcp::session::{EventParser, AvrcpCommand};
 
 pub mod sdp;
 mod packets;
 mod error;
 mod session;
 
-pub use session::{AvrcpSession, AvrcpCommand};
-use crate::avrcp::session::SessionError;
-use crate::utils::{Either2, select2};
+pub use session::{AvrcpSession, SessionError, Event, notifications};
+
 
 
 #[derive(Default)]
@@ -65,16 +66,18 @@ impl Avrcp {
                     warn!("Error configuring channel: {:?}", err);
                     return;
                 }
-                let (tx, rx) = tokio::sync::mpsc::channel(16);
+                let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(16);
+                let (evt_tx, evt_rx) = tokio::sync::mpsc::channel(16);
                 let mut state = State {
                     avctp: Avctp::new(channel, [REMOTE_CONTROL_SERVICE]),
                     command_assembler: Default::default(),
                     response_assembler: Default::default(),
                     volume: Volume(1.0),
-                    player_commands: rx,
+                    commands: cmd_rx,
+                    events: evt_tx,
                     outstanding_transactions: Default::default(),
                 };
-                session_handler.lock()(AvrcpSession { player_commands: tx });
+                session_handler.lock()(AvrcpSession { commands: cmd_tx, events: evt_rx });
                 state.run().await.unwrap_or_else(|err| {
                     warn!("Error running avctp: {:?}", err);
                 });
@@ -91,7 +94,8 @@ enum TransactionState {
     Empty,
     PendingPassThrough(OneshotSender<Result<Bytes, SessionError>>),
     PendingVendorDependent(CommandCode, OneshotSender<Result<Bytes, SessionError>>),
-    WaitingForChange
+    PendingNotificationRegistration(EventParser, OneshotSender<Result<Bytes, SessionError>>),
+    WaitingForChange(EventParser)
 }
 
 impl TransactionState {
@@ -99,15 +103,15 @@ impl TransactionState {
         matches!(self, TransactionState::Empty)
     }
 
-    pub fn take_sender(&mut self, waiting: bool) -> OneshotSender<Result<Bytes, SessionError>> {
+    pub fn take_sender(&mut self) -> OneshotSender<Result<Bytes, SessionError>> {
         let prev = std::mem::take(self);
-        if waiting {
-            debug_assert!(matches!(prev, TransactionState::PendingVendorDependent(CommandCode::Notify, _)));
-            *self = TransactionState::WaitingForChange;
-        }
         match prev {
             TransactionState::PendingPassThrough(sender) => sender,
             TransactionState::PendingVendorDependent(_, sender) => sender,
+            TransactionState::PendingNotificationRegistration(parser, sender) => {
+                *self = TransactionState::WaitingForChange(parser);
+                sender
+            },
             _ => unreachable!()
         }
     }
@@ -121,14 +125,15 @@ struct State {
 
     volume: Volume,
 
-    player_commands: Receiver<(AvrcpCommand, OneshotSender<Result<Bytes, SessionError>>)>,
+    commands: Receiver<(AvrcpCommand, OneshotSender<Result<Bytes, SessionError>>)>,
+    events: Sender<Event>,
     outstanding_transactions: [TransactionState; 16]
 }
 
 impl State {
     async fn run(&mut self) -> Result<(), hci::Error> {
         loop {
-            match select2(self.avctp.read(), self.player_commands.recv()).await {
+            match select2(self.avctp.read(), self.commands.recv()).await {
                 Either2::A(Some(mut packet)) => {
                     let transaction_label = packet.transaction_label;
                     if let Ok(frame) = packet.data.read_be::<Frame>() {
@@ -164,12 +169,22 @@ impl State {
                                 .then(|| self.outstanding_transactions[transaction] = TransactionState::PendingPassThrough(sender));
                         },
                         AvrcpCommand::VendorSpecific(cmd, pdu, params) => {
+                            // These should be registered using register notification
+                            debug_assert!(cmd != CommandCode::Notify);
                             self.send_avrcp(
                                 transaction as u8,
                                 cmd,
                                 pdu,
                                 params)
                                 .then(|| self.outstanding_transactions[transaction] = TransactionState::PendingVendorDependent(cmd, sender));
+                        }
+                        AvrcpCommand::RegisterNotification(event, parser) => {
+                            self.send_avrcp(
+                                transaction as u8,
+                                CommandCode::Notify,
+                                Pdu::RegisterNotification,
+                                (event, 0u32))
+                                .then(|| self.outstanding_transactions[transaction] = TransactionState::PendingNotificationRegistration(parser, sender));
                         }
                     }
                 },
@@ -186,7 +201,7 @@ impl State {
                 let company_id: u24 = message.data.read_be::<u24>()?;
                 ensure!(company_id == BLUETOOTH_SIG_COMPANY_ID, AvcError::NotImplemented, "Unsupported company id: {:#06x}", company_id);
                 if frame.ctype.is_response() {
-                    if let Some(Command { pdu, parameters }) = self.response_assembler.process_msg(message.data)? {
+                    if let Some(Command { pdu, mut parameters }) = self.response_assembler.process_msg(message.data)? {
                         let transaction = &mut self.outstanding_transactions[message.transaction_label as usize];
                         match transaction {
                             TransactionState::PendingVendorDependent(CommandCode::Control, _) => {
@@ -197,7 +212,7 @@ impl State {
                                     CommandCode::Interim => return Ok(()),
                                     _ => Err(SessionError::InvalidReturnData)
                                 };
-                                let _ = transaction.take_sender(false).send(reply);
+                                let _ = transaction.take_sender().send(reply);
                             },
                             TransactionState::PendingVendorDependent(CommandCode::Status, _) => {
                                 let reply = match frame.ctype {
@@ -207,9 +222,13 @@ impl State {
                                     CommandCode::InTransition => Err(SessionError::Busy),
                                     _ => Err(SessionError::InvalidReturnData)
                                 };
-                                let _ = transaction.take_sender(false).send(reply);
+                                let _ = transaction.take_sender().send(reply);
                             },
-                            TransactionState::PendingVendorDependent(CommandCode::Notify, _) => {
+                            TransactionState::PendingVendorDependent(code, _) => {
+                                error!("Received response for invalid command code: {:?}", code);
+                                *transaction = TransactionState::Empty;
+                            },
+                            TransactionState::PendingNotificationRegistration(_, _) => {
                                 let reply = match frame.ctype {
                                     CommandCode::NotImplemented => Err(SessionError::NotImplemented),
                                     CommandCode::Rejected => Err(SessionError::Rejected),
@@ -220,14 +239,21 @@ impl State {
                                     },
                                     _ => Err(SessionError::InvalidReturnData)
                                 };
-                                let _ = transaction.take_sender(reply.is_ok()).send(reply);
+                                let _ = transaction.take_sender().send(reply);
                             },
-                            TransactionState::PendingVendorDependent(code, _) => {
-                                error!("Received response for invalid command code: {:?}", code);
-                                *transaction = TransactionState::Empty;
-                            }
-                            TransactionState::WaitingForChange => {
+                            TransactionState::WaitingForChange(parser) => {
                                 log_assert!(frame.ctype == CommandCode::Changed);
+                                let event = parameters
+                                    .read_be::<EventId>()
+                                    .and_then(|_| parser(&mut parameters))
+                                    .map_err(|err| {
+                                        error!("Error parsing event: {:?}", err);
+                                    });
+                                if let Ok(event) = event {
+                                    self.events.try_send(event).unwrap_or_else(|err| {
+                                        warn!("Error sending event: {:?}", err);
+                                    });
+                                }
                                 *transaction = TransactionState::Empty;
                             }
                             _ => {
@@ -278,7 +304,7 @@ impl State {
                     warn!("Received pass-through response with no/wrong outstanding transaction: {:?} {:?}", message, transaction);
                     return Ok(());
                 }
-                let _ = transaction.take_sender(false).send(match frame.ctype {
+                let _ = transaction.take_sender().send(match frame.ctype {
                     CommandCode::Accepted => Ok(message.data),
                     CommandCode::Rejected => Err(SessionError::Rejected),
                     CommandCode::NotImplemented => Err(SessionError::NotImplemented),
@@ -335,7 +361,7 @@ impl State {
                     },
                     EVENTS_SUPPORTED_CAPABILITY => {
                         //TODO Support a second event type to conform to spec
-                        self.send_avrcp(transaction, CommandCode::Implemented, pdu, (EVENTS_SUPPORTED_CAPABILITY, 1, Event::VolumeChanged));
+                        self.send_avrcp(transaction, CommandCode::Implemented, pdu, (EVENTS_SUPPORTED_CAPABILITY, 1, EventId::VolumeChanged));
                         Ok(())
                     },
                     _ => {
@@ -347,10 +373,10 @@ impl State {
             // ([AVRCP] Section 6.7.2)
             Pdu::RegisterNotification => {
                 // ensure!(cmd == CommandCode::Notify, ErrorCode::InvalidCommand);
-                let event: Event = parameters.read_be()?;
+                let event: EventId = parameters.read_be()?;
                 let _: u32 = parameters.read_be()?;
                 parameters.finish()?;
-                ensure!(event == Event::VolumeChanged, ErrorCode::InvalidParameter);
+                ensure!(event == EventId::VolumeChanged, ErrorCode::InvalidParameter);
                 // ([AVRCP] Section 6.13.3)
                 self.send_avrcp(transaction, CommandCode::Interim, pdu, (event, self.volume));
                 Ok(())

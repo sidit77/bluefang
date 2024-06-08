@@ -27,7 +27,8 @@ use bluefang::avdtp::{AvdtpBuilder, LocalEndpoint, StreamHandler};
 use bluefang::avdtp::capabilities::{Capability, MediaCodecCapability};
 use bluefang::avdtp::error::ErrorCode;
 use bluefang::avdtp::packets::{MediaType, StreamEndpointType};
-use bluefang::avrcp::{AvrcpBuilder, AvrcpSession};
+use bluefang::avrcp::{AvrcpBuilder, AvrcpSession, Event};
+use bluefang::avrcp::notifications::TrackChanged;
 use bluefang::avrcp::sdp::{AvrcpControllerServiceRecord, AvrcpTargetServiceRecord};
 
 use bluefang::firmware::RealTekFirmwareLoader;
@@ -37,6 +38,7 @@ use bluefang::hci::Hci;
 use bluefang::host::usb::UsbController;
 use bluefang::l2cap::{L2capServerBuilder};
 use bluefang::sdp::SdpBuilder;
+use bluefang::utils::{Either2, select2};
 
 
 #[tokio::main]
@@ -105,15 +107,29 @@ async fn main() -> anyhow::Result<()> {
 
 }
 
-fn avrcp_session_handler(session: AvrcpSession) {
+fn avrcp_session_handler(mut session: AvrcpSession) {
     let mut commands = command_reader();
     spawn(async move {
         info!("Supported Events: {:?}", session.get_supported_events().await.unwrap());
+        let mut current_track: TrackChanged = session.register_notification().await.unwrap();
+        println!("Current Track: {:?}", current_track);
+        loop {
+            match select2(commands.recv(), session.next_event()).await.transpose() {
+                Some(Either2::A(command)) => match command {
+                    PlayerCommand::Play => session.play().await,
+                    PlayerCommand::Pause => session.pause().await,
+                }.unwrap_or_else(|err| warn!("Failed to send command: {:?}", err)),
+                Some(Either2::B(event)) => match event {
+                    Event::TrackChanged(_) => {
+                        current_track = session.register_notification().await.unwrap();
+                        println!("Track Changed: {:?}", current_track);
+                    },
+                },
+                None => break
+            }
+        }
         while let Some(command) = commands.recv().await {
-            match command {
-                PlayerCommand::Play => session.play().await,
-                PlayerCommand::Pause => session.pause().await,
-            }.unwrap_or_else(|err| warn!("Failed to send command: {:?}", err));
+
         }
     });
 }
