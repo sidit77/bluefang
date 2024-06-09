@@ -1,11 +1,12 @@
 use std::future::Future;
-use bytes::{Bytes};
-use instructor::{BigEndian, Buffer, Exstruct};
+use bytes::{Bytes, BytesMut};
+use instructor::{BigEndian, Buffer, BufferMut, Exstruct};
+use thiserror::Error;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::oneshot::Sender as OneshotSender;
 use crate::avc::{CommandCode, PassThroughFrame, PassThroughOp, PassThroughState};
-use crate::avrcp::notifications::TrackChanged;
-use crate::avrcp::packets::{EventId, EVENTS_SUPPORTED_CAPABILITY, Pdu};
+use crate::avrcp::notifications::CurrentTrack;
+use crate::avrcp::packets::{EventId, EVENTS_SUPPORTED_CAPABILITY, MediaAttributeId, Pdu};
 use crate::ensure;
 use crate::utils::to_bytes_be;
 
@@ -71,15 +72,38 @@ impl AvrcpSession {
         Ok(notification)
     }
 
+    pub async fn get_current_media_attributes(&self, filter: Option<&[MediaAttributeId]>) -> Result<(), SessionError> {
+        const PLAYING: u8 = 0x00;
+        debug_assert!(filter.map_or(true, |filter| !filter.is_empty()), "Filter should not be empty");
+        let mut buffer = BytesMut::new();
+        buffer.write_be(PLAYING);
+        match filter {
+            None => buffer.write_be(0u8),
+            Some(filter) => {
+                buffer.write_be(filter.len() as u8);
+                for &id in filter {
+                    buffer.write_be(id);
+                }
+            }
+        }
+        Ok(())
+    }
+
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Error)]
 pub enum SessionError {
+    #[error("The AVRCP session has been closed.")]
     SessionClosed,
+    #[error("All 16 transaction ids are currently occupied.")]
     NoTransactionIdAvailable,
+    #[error("The receiver does not implemented the command.")]
     NotImplemented,
+    #[error("The receiver rejected the command.")]
     Rejected,
+    #[error("The receiver is currently unable to perform this action due to being in a transient state.")]
     Busy,
+    #[error("The returned data has an invalid format.")]
     InvalidReturnData
 }
 
@@ -101,28 +125,42 @@ pub trait Notification: Exstruct<BigEndian> + Into<Event> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
-    TrackChanged(TrackChanged),
+    TrackChanged(CurrentTrack),
 }
 
 
 pub mod notifications {
-    use instructor::Exstruct;
+    use instructor::{BigEndian, Buffer, Error, Exstruct};
     use crate::avrcp::Event;
     use crate::avrcp::packets::EventId;
     use crate::avrcp::session::Notification;
 
-    #[derive(Debug, Copy, Clone, PartialEq, Eq, Exstruct)]
-    pub struct TrackChanged {
-        pub identifier: u64
+    #[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
+    pub enum CurrentTrack {
+        #[default]
+        NotSelected,
+        Selected,
+        Id(u64)
     }
 
-    impl From<TrackChanged> for Event {
-        fn from(event: TrackChanged) -> Self {
+    impl Exstruct<BigEndian> for CurrentTrack {
+        fn read_from_buffer<B: Buffer>(buffer: &mut B) -> Result<Self, Error> {
+            let id: u64 = buffer.read_be()?;
+            Ok(match id {
+                u64::MIN => Self::NotSelected,
+                u64::MAX => Self::Selected,
+                i => Self::Id(i)
+            })
+        }
+    }
+
+    impl From<CurrentTrack> for Event {
+        fn from(event: CurrentTrack) -> Self {
             Self::TrackChanged(event)
         }
     }
 
-    impl Notification for TrackChanged {
+    impl Notification for CurrentTrack {
         const EVENT_ID: EventId = EventId::TrackChanged;
     }
 }

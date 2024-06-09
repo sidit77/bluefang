@@ -107,8 +107,8 @@ impl Hci {
     pub async fn call_with_args<T: Exstruct<LittleEndian>>(&self, cmd: Opcode, packer: impl FnOnce(&mut BytesMut)) -> Result<T, Error> {
         // TODO: check if the command is supported
         let mut buf = BytesMut::with_capacity(255);
-        buf.write::<u16, LittleEndian>(&cmd.into());
-        buf.write::<u8, LittleEndian>(&0);
+        buf.write::<u16, LittleEndian>(cmd.into());
+        buf.write::<u8, LittleEndian>(0);
         packer(&mut buf);
         let payload_len = u8::try_from(buf.len() - 3).map_err(|_| Error::PayloadTooLarge)?;
         buf[2] = payload_len;
@@ -154,7 +154,7 @@ impl AclSender {
         let mut buffer = BytesMut::with_capacity(512);
         let mut pb = BoundaryFlag::FirstNonAutomaticallyFlushable;
         for chunk in pdu.chunks(self.max_size) {
-            buffer.write(&AclHeader {
+            buffer.write(AclHeader {
                 handle,
                 pb,
                 bc: BroadcastFlag::PointToPoint,

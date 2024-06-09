@@ -46,7 +46,7 @@ impl From<ClassOfDevice> for u32 {
 impl<E: Endian> Instruct<E> for ClassOfDevice {
     fn write_to_buffer<B: BufferMut + ?Sized>(&self, buffer: &mut B) {
         let value: u32 = u32::from(*self);
-        buffer.write::<u24, E>(&value.try_into().unwrap());
+        buffer.write::<u24, E>(value.try_into().unwrap());
     }
 }
 

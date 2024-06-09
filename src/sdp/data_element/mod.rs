@@ -339,134 +339,134 @@ impl Instruct<BigEndian> for DataElement {
     fn write_to_buffer<B: BufferMut>(&self, buffer: &mut B) {
         match self {
             DataElement::Nil => {
-                buffer.write(&DataElementHeader {
+                buffer.write(DataElementHeader {
                     data_type: DataType::Nil,
                     size_index: 0
                 });
             },
             DataElement::U8(val) => {
-                buffer.write(&DataElementHeader {
+                buffer.write(DataElementHeader {
                     data_type: DataType::UInt,
                     size_index: 0
                 });
-                buffer.write_be(val);
+                buffer.write_be(*val);
             },
             DataElement::U16(val) => {
-                buffer.write(&DataElementHeader {
+                buffer.write(DataElementHeader {
                     data_type: DataType::UInt,
                     size_index: 1
                 });
-                buffer.write_be(val);
+                buffer.write_be(*val);
             },
             DataElement::U32(val) => {
-                buffer.write(&DataElementHeader {
+                buffer.write(DataElementHeader {
                     data_type: DataType::UInt,
                     size_index: 2
                 });
-                buffer.write_be(val);
+                buffer.write_be(*val);
             },
             DataElement::U64(val) => {
-                buffer.write(&DataElementHeader {
+                buffer.write(DataElementHeader {
                     data_type: DataType::UInt,
                     size_index: 3
                 });
-                buffer.write_be(val);
+                buffer.write_be(*val);
             },
             DataElement::U128(val) => {
-                buffer.write(&DataElementHeader {
+                buffer.write(DataElementHeader {
                     data_type: DataType::UInt,
                     size_index: 4
                 });
-                buffer.write_be(val);
+                buffer.write_be(*val);
             },
             DataElement::I8(val) => {
-                buffer.write(&DataElementHeader {
+                buffer.write(DataElementHeader {
                     data_type: DataType::SInt,
                     size_index: 0
                 });
-                buffer.write_be(val);
+                buffer.write_be(*val);
             },
             DataElement::I16(val) => {
-                buffer.write(&DataElementHeader {
+                buffer.write(DataElementHeader {
                     data_type: DataType::SInt,
                     size_index: 1
                 });
-                buffer.write_be(val);
+                buffer.write_be(*val);
             },
             DataElement::I32(val) => {
-                buffer.write(&DataElementHeader {
+                buffer.write(DataElementHeader {
                     data_type: DataType::SInt,
                     size_index: 2
                 });
-                buffer.write_be(val);
+                buffer.write_be(*val);
             },
             DataElement::I64(val) => {
-                buffer.write(&DataElementHeader {
+                buffer.write(DataElementHeader {
                     data_type: DataType::SInt,
                     size_index: 3
                 });
-                buffer.write_be(val);
+                buffer.write_be(*val);
             },
             DataElement::I128(val) => {
-                buffer.write(&DataElementHeader {
+                buffer.write(DataElementHeader {
                     data_type: DataType::SInt,
                     size_index: 4
                 });
-                buffer.write_be(val);
+                buffer.write_be(*val);
             },
             DataElement::Uuid(val) => {
                 let packed = val.as_packed();
-                buffer.write(&DataElementHeader {
+                buffer.write(DataElementHeader {
                     data_type: DataType::Uuid,
                     size_index: packed.size_index()
                 });
-                buffer.write_be(&packed);
+                buffer.write_be(packed);
             },
             DataElement::Text(val) => {
                 let length = DynamicLength::from_length(val.len());
-                buffer.write(&DataElementHeader {
+                buffer.write(DataElementHeader {
                     data_type: DataType::Text,
                     size_index: length.size_index()
                 });
-                buffer.write(&length);
+                buffer.write(length);
                 buffer.extend_from_slice(val.as_bytes());
             },
             DataElement::Bool(val) => {
-                buffer.write(&DataElementHeader {
+                buffer.write(DataElementHeader {
                     data_type: DataType::Bool,
                     size_index: 0
                 });
-                buffer.write_be(&u8::from(*val));
+                buffer.write_be(u8::from(*val));
             },
             DataElement::Sequence(val) => {
                 let length = DynamicLength::from_length(val.iter().map(Self::byte_size).sum());
-                buffer.write(&DataElementHeader {
+                buffer.write(DataElementHeader {
                     data_type: DataType::Sequence,
                     size_index: length.size_index()
                 });
-                buffer.write(&length);
+                buffer.write(length);
                 for element in val {
-                    buffer.write(element);
+                    buffer.write_ref(element);
                 }
             },
             DataElement::Alternative(val) => {
                 let length = DynamicLength::from_length(val.iter().map(Self::byte_size).sum());
-                buffer.write(&DataElementHeader {
+                buffer.write(DataElementHeader {
                     data_type: DataType::Alternative,
                     size_index: length.size_index()
                 });
-                buffer.write(&length);
+                buffer.write(length);
                 for element in val {
-                    buffer.write(element);
+                    buffer.write_ref(element);
                 }
             },
             DataElement::Url(val) => {
                 let length = DynamicLength::from_length(val.len());
-                buffer.write(&DataElementHeader {
+                buffer.write(DataElementHeader {
                     data_type: DataType::Url,
                     size_index: length.size_index()
                 });
-                buffer.write(&length);
+                buffer.write(length);
                 buffer.extend_from_slice(val.as_bytes());
             }
         }

@@ -17,6 +17,6 @@ impl<T> SliceExt<T> for [T] {
 
 pub fn to_bytes_be<I: Instruct<BigEndian>>(value: I) -> Bytes {
     let mut buffer = BytesMut::new();
-    buffer.write_be(&value);
+    buffer.write_be(value);
     buffer.freeze()
 }

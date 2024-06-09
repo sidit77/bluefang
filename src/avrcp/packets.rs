@@ -71,6 +71,20 @@ pub enum Pdu {
     GeneralReject = 0xA0,
 }
 
+// ([AVRCP] Section 26)
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Instruct, Exstruct)]
+#[repr(u8)]
+pub enum MediaAttributeId {
+    Title = 0x01,
+    ArtistName = 0x02,
+    AlbumName = 0x03,
+    TrackNumber = 0x04,
+    TotalNumberOfTracks = 0x05,
+    Genre = 0x06,
+    PlayingTime = 0x07,
+    DefaultCoverArt = 0x08,
+}
+
 // ([AVRCP] Section 28)
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Instruct, Exstruct)]
 #[repr(u8)]
@@ -148,16 +162,16 @@ pub fn fragment_command<P, F, E>(cmd: CommandCode, pdu: Pdu, parameters: P, mut 
 {
     const MAX_PAYLOAD_SIZE: usize = 512 - 3 - 3 - 3;
     let mut buffer = BytesMut::new();
-    buffer.write(&parameters);
+    buffer.write(parameters);
     let mut parameters = buffer.split().freeze();
     let mut first = true;
     while {
-        buffer.write(&Frame {
+        buffer.write(Frame {
             ctype: cmd,
             subunit: PANEL,
             opcode: Opcode::VendorDependent,
         });
-        buffer.write_be(&BLUETOOTH_SIG_COMPANY_ID);
+        buffer.write_be(BLUETOOTH_SIG_COMPANY_ID);
         let payload = parameters.split_to(MAX_PAYLOAD_SIZE.min(parameters.len()));
         let packet_type = match (first, parameters.is_empty()) {
             (true, true) => PacketType::Single,
@@ -165,7 +179,7 @@ pub fn fragment_command<P, F, E>(cmd: CommandCode, pdu: Pdu, parameters: P, mut 
             (false, false) => PacketType::Continue,
             (false, true) => PacketType::End,
         };
-        buffer.write(&CommandHeader {
+        buffer.write(CommandHeader {
             pdu,
             packet_type,
             parameter_length: payload.len() as u16,

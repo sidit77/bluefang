@@ -69,11 +69,11 @@ impl Instruct<BigEndian> for Capability {
             Capability::MediaCodec(codec) => (ServiceCategory::MediaCodec, codec.byte_size()),
             Capability::Generic(cat, info) => (*cat, info.byte_size())
         };
-        buffer.write_be(&cat);
-        buffer.write_be(&u8::try_from(size).expect("byte size is too large"));
+        buffer.write_be(cat);
+        buffer.write_be(u8::try_from(size).expect("byte size is too large"));
         match self {
             Capability::MediaTransport => {}
-            Capability::MediaCodec(codec) => buffer.write_be(codec),
+            Capability::MediaCodec(codec) => buffer.write_be_ref(codec),
             Capability::Generic(_, info) => buffer.extend_from_slice(info)
         }
     }
@@ -100,7 +100,7 @@ impl Instruct<BigEndian> for MediaCodec {
             MediaCodec::Video(codec) => (MediaType::Video, *codec as u8),
             MediaCodec::Multimedia(codec) => (MediaType::Audio, *codec)
         };
-        buffer.write_be(&(MediaTypeRaw(t), c));
+        buffer.write_be((MediaTypeRaw(t), c));
     }
 }
 
@@ -125,11 +125,11 @@ impl Instruct<BigEndian> for MediaCodecCapability {
     fn write_to_buffer<B: BufferMut>(&self, buffer: &mut B) {
         match self {
             MediaCodecCapability::Sbc(info) => {
-                buffer.write_be(&MediaCodec::Audio(AudioCodec::Sbc));
-                buffer.write_be(info);
+                buffer.write_be(MediaCodec::Audio(AudioCodec::Sbc));
+                buffer.write_be_ref(info);
             }
             MediaCodecCapability::Generic(codec, info) => {
-                buffer.write_be(codec);
+                buffer.write_be_ref(codec);
                 buffer.extend_from_slice(info);
             }
         }

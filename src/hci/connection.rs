@@ -238,8 +238,8 @@ impl ConnectionManagerState {
     fn save_link_keys(&self) {
         let mut data = BytesMut::new();
         for (addr, key) in &self.link_keys {
-            data.write_le(addr);
-            data.write_le(key);
+            data.write_le_ref(addr);
+            data.write_le_ref(key);
         }
         let data = data.freeze();
         let path = self.link_key_store.clone();

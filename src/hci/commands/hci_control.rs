@@ -1,5 +1,5 @@
 use bytes::BufMut;
-use instructor::{BufferMut, LittleEndian};
+use instructor::{BufferMut};
 use crate::hci::{Error, Hci};
 use crate::hci::commands::{Opcode, OpcodeGroup};
 use crate::hci::consts::{ClassOfDevice, EventMask};
@@ -9,7 +9,7 @@ impl Hci {
 
     pub async fn set_event_mask(&self, mask: EventMask) -> Result<(), Error> {
         self.call_with_args(Opcode::new(OpcodeGroup::HciControl, 0x0001), |p| {
-            p.write_le(&mask);
+            p.write_le(mask);
         }).await
     }
 
@@ -33,7 +33,7 @@ impl Hci {
     /// ([Vol 4] Part E, Section 7.3.18).
     pub async fn set_scan_enabled(&self, connectable: bool, discoverable: bool) -> Result<(), Error> {
         self.call_with_args(Opcode::new(OpcodeGroup::HciControl, 0x001A), |p| {
-            p.write::<u8, LittleEndian>(&(u8::from(connectable) << 1 | u8::from(discoverable)));
+            p.write_le(u8::from(connectable) << 1 | u8::from(discoverable));
         }).await
     }
 
@@ -41,21 +41,21 @@ impl Hci {
     /// ([Vol 4] Part E, Section 7.3.26).
     pub async fn write_class_of_device(&self, cod: ClassOfDevice) -> Result<(), Error> {
         self.call_with_args(Opcode::new(OpcodeGroup::HciControl, 0x0024), |p| {
-            p.write_le(&cod);
+            p.write_le(cod);
         }).await
     }
 
     /// ([Vol 4] Part E, Section 7.3.59).
     pub async fn set_simple_pairing_support(&self, enabled: bool) -> Result<(), Error> {
         self.call_with_args(Opcode::new(OpcodeGroup::HciControl, 0x0056), |p| {
-            p.write_le(&enabled);
+            p.write_le(enabled);
         }).await
     }
 
     /// ([Vol 4] Part E, Section 7.3.92).
     pub async fn set_secure_connections_support(&self, enabled: bool) -> Result<(), Error> {
         self.call_with_args(Opcode::new(OpcodeGroup::HciControl, 0x007A), |p| {
-            p.write_le(&enabled);
+            p.write_le(enabled);
         }).await
     }
 

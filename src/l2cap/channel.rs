@@ -28,12 +28,12 @@ pub struct Channel {
 impl Channel {
 
     fn send_configure_signal(&self, code: SignalingCodes, id: u8, mut options: BytesMut) -> Result<(), Error> {
-        options.write_front(&SignalingHeader {
+        options.write_front(SignalingHeader {
             code,
             id,
             length: Length::new(options.len())?,
         });
-        options.write_front(&L2capHeader {
+        options.write_front(L2capHeader {
             len: Length::new(options.len())?,
             cid: CID_ID_SIGNALING,
         });
@@ -44,11 +44,11 @@ impl Channel {
     pub async fn configure(&mut self) -> Result<(), Error> {
         sleep(Duration::from_millis(400)).await;
         let mut options = BytesMut::new();
-        options.write_le(&self.remote_cid);
-        options.write_le(&0x0000u16);
-        options.write_le(&0x01u8);
-        options.write_le(&0x02u8);
-        options.write_le(&DEFAULT_MTU);
+        options.write_le(self.remote_cid);
+        options.write_le(0x0000u16);
+        options.write_le(0x01u8);
+        options.write_le(0x02u8);
+        options.write_le(DEFAULT_MTU);
         let waiting_id = self.next_signaling_id.fetch_add(1, Ordering::Relaxed);
         self.send_configure_signal(SignalingCodes::ConfigureRequest, waiting_id, options)?;
 
@@ -57,18 +57,18 @@ impl Channel {
                 ChannelEvent::DataReceived(_) => trace!("Received data while still configuring"),
                 ChannelEvent::ConfigurationRequest(id, mut options) => {
                     let mut resp = BytesMut::new();
-                    resp.write_le(&self.remote_cid);
-                    resp.write_le(&0x0000u16);
-                    resp.write_le(&ConfigureResult::Success);
+                    resp.write_le(self.remote_cid);
+                    resp.write_le(0x0000u16);
+                    resp.write_le(ConfigureResult::Success);
                     if options.is_empty() {
                         self.send_configure_signal(SignalingCodes::ConfigureResponse, id, resp)?;
                     } else {
                         ensure!(options.read_le::<u8>()? == 0x01, "Expected MTU");
                         ensure!(options.read_le::<u8>()? == 0x02, "Expected length 2");
                         self.remote_mtu = options.read_le()?;
-                        resp.write_le(&0x01u8);
-                        resp.write_le(&0x02u8);
-                        resp.write_le(&self.remote_mtu);
+                        resp.write_le(0x01u8);
+                        resp.write_le(0x02u8);
+                        resp.write_le(self.remote_mtu);
                         self.send_configure_signal(SignalingCodes::ConfigureResponse, id, resp)?;
                     }
 
@@ -103,7 +103,7 @@ impl Channel {
 
     pub fn write(&self, data: Bytes) -> Result<(), Error> {
         let mut buffer = BytesMut::new();
-        buffer.write_le(&L2capHeader {
+        buffer.write_le(L2capHeader {
             len: Length::new(data.len())?,
             cid: self.remote_cid,
         });

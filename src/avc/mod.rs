@@ -216,14 +216,14 @@ impl Instruct<BigEndian> for Subunit {
         assert_ne!(self.ty, SubunitType::Extended);
         assert!(self.id <= 514 && self.id != 5 && self.id != 6);
         let id = if self.ty == SubunitType::Unit { 7 } else { self.id.min(5) as u8 };
-        buffer.write_be(&SubunitHeader { ty: self.ty, id });
+        buffer.write_be(SubunitHeader { ty: self.ty, id });
         let rem = self.id - id as u32;
         if rem > 0 {
             let extension = rem.min(0xFF) as u8;
-            buffer.write_be(&extension);
+            buffer.write_be(extension);
             let rem = rem - extension as u32;
             if extension == 0xFF {
-                buffer.write_be(&(rem as u8 + 1));
+                buffer.write_be(rem as u8 + 1);
             }
         }
     }

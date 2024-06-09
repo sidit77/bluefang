@@ -176,7 +176,7 @@ impl AvdtpSession {
                 data.finish()?;
                 trace!("Got DISCOVER request");
                 for endpoint in self.local_endpoints.iter() {
-                    buf.write(&endpoint.as_stream_endpoint());
+                    buf.write(endpoint.as_stream_endpoint());
                 }
                 Ok(())
             }),
@@ -189,7 +189,7 @@ impl AvdtpSession {
                 ep.capabilities
                     .iter()
                     .filter(|cap| cap.is_basic())
-                    .for_each(|cap| buf.write(cap));
+                    .for_each(|cap| buf.write_ref(cap));
                 Ok(())
             }),
             // ([AVDTP] Section 8.8).
@@ -198,7 +198,7 @@ impl AvdtpSession {
                 data.finish()?;
                 trace!("Got GET_ALL_CAPABILITIES request for 0x{:02x}", seid);
                 let ep = self.get_endpoint(seid)?;
-                buf.write(&ep.capabilities);
+                buf.write_ref(&ep.capabilities);
                 Ok(())
             }),
             // ([AVDTP] Section 8.9).
@@ -219,7 +219,7 @@ impl AvdtpSession {
                 data.finish()?;
                 trace!("Got GET_CONFIGURATION request for 0x{:02x}", seid);
                 let stream = self.get_stream(seid)?;
-                buf.write(stream.get_capabilities()?);
+                buf.write_ref(stream.get_capabilities()?);
                 Ok(())
             }),
             // ([AVDTP] Section 8.11).
@@ -349,8 +349,8 @@ impl SignalMessageResponse {
             Err(reason) => {
                 warn!("Rejecting signal {:?} because of {:?}", self.signal_identifier, reason);
                 buf.clear();
-                buf.write_be(&ctx);
-                buf.write_be(&reason);
+                buf.write_be(ctx);
+                buf.write_be(reason);
                 SignalMessage {
                     transaction_label: self.transaction_label,
                     message_type: MessageType::ResponseReject,

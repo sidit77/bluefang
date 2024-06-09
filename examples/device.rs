@@ -27,8 +27,8 @@ use bluefang::avdtp::{AvdtpBuilder, LocalEndpoint, StreamHandler};
 use bluefang::avdtp::capabilities::{Capability, MediaCodecCapability};
 use bluefang::avdtp::error::ErrorCode;
 use bluefang::avdtp::packets::{MediaType, StreamEndpointType};
-use bluefang::avrcp::{AvrcpBuilder, AvrcpSession, Event};
-use bluefang::avrcp::notifications::TrackChanged;
+use bluefang::avrcp::{AvrcpBuilder, AvrcpSession, Event, Notification};
+use bluefang::avrcp::notifications::CurrentTrack;
 use bluefang::avrcp::sdp::{AvrcpControllerServiceRecord, AvrcpTargetServiceRecord};
 
 use bluefang::firmware::RealTekFirmwareLoader;
@@ -110,9 +110,12 @@ async fn main() -> anyhow::Result<()> {
 fn avrcp_session_handler(mut session: AvrcpSession) {
     let mut commands = command_reader();
     spawn(async move {
-        info!("Supported Events: {:?}", session.get_supported_events().await.unwrap());
-        let mut current_track: TrackChanged = session.register_notification().await.unwrap();
-        println!("Current Track: {:?}", current_track);
+        let supported_events = session.get_supported_events().await.unwrap_or_default();
+        info!("Supported Events: {:?}", supported_events);
+        if supported_events.contains(&CurrentTrack::EVENT_ID) {
+            retrieve_current_track_info(&session).await
+                .unwrap_or_else(|err| warn!("Failed to retrieve current track info: {:?}", err));
+        }
         loop {
             match select2(commands.recv(), session.next_event()).await.transpose() {
                 Some(Either2::A(command)) => match command {
@@ -121,17 +124,24 @@ fn avrcp_session_handler(mut session: AvrcpSession) {
                 }.unwrap_or_else(|err| warn!("Failed to send command: {:?}", err)),
                 Some(Either2::B(event)) => match event {
                     Event::TrackChanged(_) => {
-                        current_track = session.register_notification().await.unwrap();
-                        println!("Track Changed: {:?}", current_track);
+                        retrieve_current_track_info(&session).await
+                            .unwrap_or_else(|err| warn!("Failed to retrieve current track info: {:?}", err));
                     },
                 },
                 None => break
             }
         }
-        while let Some(command) = commands.recv().await {
-
-        }
     });
+}
+
+async fn retrieve_current_track_info(session: &AvrcpSession) -> anyhow::Result<()> {
+    let current_track: CurrentTrack = session.register_notification().await?;
+    match current_track {
+        CurrentTrack::NotSelected => info!("No track selected"),
+        CurrentTrack::Selected => {}
+        CurrentTrack::Id(id) => info!("Track ID: {:?}", id),
+    }
+    Ok(())
 }
 
 struct SbcStreamHandler {

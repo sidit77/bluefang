@@ -124,7 +124,7 @@ impl Sdp {
                                 .map(|service| collect_attributes(service, &attributes_id_list))
                                 .ok_or(Error::UnknownServiceRecordHandle(service_record_handle))?;
 
-                            buffer.write(&attribute_list);
+                            buffer.write(attribute_list);
                         },
                         ContinuationState::Continue => {
                             ensure!(!buffer.is_empty(), Error::InvalidContinuationState);
@@ -158,7 +158,7 @@ impl Sdp {
                                 .filter(|element| !element.is_empty())
                                 .collect::<DataElement>();
 
-                            buffer.write(&attribute_list);
+                            buffer.write(attribute_list);
                         },
                         ContinuationState::Continue => {
                             ensure!(!buffer.is_empty(), Error::InvalidContinuationState);
@@ -180,12 +180,12 @@ impl Sdp {
                 ResponsePacket::Error(SdpErrorCodes::from(err))
             });
             let mut packet = BytesMut::new();
-            packet.write(&SdpHeader {
+            packet.write(SdpHeader {
                 pdu: reply.pdu(),
                 transaction_id,
                 parameter_length: Length::new(reply.byte_size())?,
             });
-            packet.write(&reply);
+            packet.write(reply);
             channel.write(packet.freeze())?;
         }
         Ok(())
@@ -352,10 +352,10 @@ impl Exstruct<BigEndian> for ContinuationState {
 impl Instruct<BigEndian> for ContinuationState {
     fn write_to_buffer<B: BufferMut>(&self, buffer: &mut B) {
         match self {
-            Self::None => buffer.write_be(&0u8),
+            Self::None => buffer.write_be(0u8),
             Self::Continue => {
-                buffer.write_be(&4u8);
-                buffer.write_be(&Self::CONTINUATION_STATE);
+                buffer.write_be(4u8);
+                buffer.write_be(Self::CONTINUATION_STATE);
             }
         }
     }

@@ -24,7 +24,7 @@ mod packets;
 mod error;
 mod session;
 
-pub use session::{AvrcpSession, SessionError, Event, notifications};
+pub use session::{AvrcpSession, SessionError, Event, Notification, notifications};
 
 
 
@@ -335,8 +335,8 @@ impl State {
 
     fn send_avc<I: Instruct<BigEndian>>(&mut self, transaction_label: u8, frame: Frame, parameters: I) -> bool {
         let mut buffer = BytesMut::new();
-        buffer.write(&frame);
-        buffer.write(&parameters);
+        buffer.write(frame);
+        buffer.write(parameters);
         self.avctp.send_msg(Message {
             transaction_label,
             profile_id: REMOTE_CONTROL_SERVICE,
@@ -412,6 +412,6 @@ impl Exstruct<BigEndian> for Volume {
 impl Instruct<BigEndian> for Volume {
     fn write_to_buffer<B: BufferMut>(&self, buffer: &mut B) {
         let volume = (self.0.max(0.0).min(1.0) * 0x7F as f32).round() as u8;
-        buffer.write_be(&volume);
+        buffer.write_be(volume);
     }
 }

@@ -70,7 +70,7 @@ pub enum Lap {
 
 impl<E: Endian> Instruct<E> for Lap {
     fn write_to_buffer<B: BufferMut + ?Sized>(&self, buffer: &mut B) {
-        buffer.write::<u24, E>(&(*self as u32).try_into().unwrap());
+        buffer.write::<u24, E>((*self as u32).try_into().unwrap());
     }
 }
 

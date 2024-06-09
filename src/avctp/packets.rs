@@ -131,12 +131,12 @@ impl ControlChannelExt for Channel {
     fn send_msg(&mut self, message: Message) -> Result<(), hci::Error> {
         //TODO fragment message if necessary
         let mut buffer = BytesMut::new();
-        buffer.write(&PacketHeader {
+        buffer.write(PacketHeader {
             transaction_label: message.transaction_label,
             packet_type: PacketType::Single,
             message_type: message.message_type,
         });
-        buffer.write_be(&message.profile_id.as_u16().expect("Invalid profile id"));
+        buffer.write_be(message.profile_id.as_u16().expect("Invalid profile id"));
         buffer.put(message.data);
         self.write(buffer.freeze())?;
         Ok(())

@@ -16,12 +16,12 @@ impl State {
     fn send_response<F: FnOnce(&mut BytesMut)>(&self, ctx: SignalingContext, code: SignalingCodes, writer: F) -> Result<(), Error> {
         let mut data = BytesMut::new();
         writer(&mut data);
-        data.write_front(&SignalingHeader {
+        data.write_front(SignalingHeader {
             code,
             id: ctx.id,
             length: Length::new(data.len())?,
         });
-        data.write_front(&L2capHeader {
+        data.write_front(L2capHeader {
             len: Length::new(data.len())?,
             cid: CID_ID_SIGNALING,
         });
@@ -51,7 +51,7 @@ impl State {
             _ => {
                 warn!("        Unsupported");
                 self.send_response(ctx, SignalingCodes::CommandReject, |data| {
-                    data.write_le(&RejectReason::CommandNotUnderstood);
+                    data.write_le(RejectReason::CommandNotUnderstood);
                 })?;
             },
         };
@@ -66,10 +66,10 @@ impl State {
         let resp = self.handle_channel_connection(ctx.handle, psm, scid);
 
         self.send_response(ctx, SignalingCodes::ConnectionResponse, |data| {
-            data.write_le(&resp.ok().unwrap_or_default());
-            data.write_le(&scid);
-            data.write_le(&resp.err().unwrap_or(ConnectionResult::Success));
-            data.write_le(&ConnectionStatus::NoFurtherInformation);
+            data.write_le(resp.ok().unwrap_or_default());
+            data.write_le(scid);
+            data.write_le(resp.err().unwrap_or(ConnectionResult::Success));
+            data.write_le(ConnectionStatus::NoFurtherInformation);
         })?;
         Ok(())
     }
@@ -105,11 +105,11 @@ impl State {
         debug!("        Disconnect request: DCID={:04X} SCID={:04X}", dcid, scid);
         match self.channels.remove(&dcid) {
             Some(_) => self.send_response(ctx, SignalingCodes::DisconnectionResponse, |data| {
-                data.write_le(&dcid);
-                data.write_le(&scid);
+                data.write_le(dcid);
+                data.write_le(scid);
             })?,
             None => self.send_response(ctx, SignalingCodes::CommandReject, |data| {
-                data.write_le(&RejectReason::InvalidCid { scid, dcid });
+                data.write_le(RejectReason::InvalidCid { scid, dcid });
             })?
         }
         Ok(())
@@ -126,13 +126,13 @@ impl State {
         let info_type: u16 = data.read_le()?;
         data.finish()?;
         self.send_response(ctx, SignalingCodes::InformationResponse, |data| {
-            data.write_le(&info_type);
+            data.write_le(info_type);
             match info_type {
                 0x0001 => {
                     debug!("        Connectionless MTU");
                     let mtu = 1024u16; //TODO: fill in the real value
-                    data.write_le(&0x0000u16); //Success
-                    data.write_le(&mtu);
+                    data.write_le(0x0000u16); //Success
+                    data.write_le(mtu);
                 }
                 0x0002 => {
                     debug!("        Local supported features");
@@ -143,8 +143,8 @@ impl State {
                     features |= 1 << 7; // Fixed Channels supported over BR/EDR
                     //features |= 1 << 9; // Unicast Connectionless Data Reception
 
-                    data.write_le(&0x0000u16); //Success
-                    data.write_le(&features);
+                    data.write_le(0x0000u16); //Success
+                    data.write_le(features);
                 },
                 0x0003 => {
                     debug!("        Fixed channels supported");
@@ -154,12 +154,12 @@ impl State {
                     //channels |= 1 << 2; // Connectionless reception
                     //channels |= 1 << 7; // BR/EDR Security Manager
 
-                    data.write_le(&0x0000u16); //Success
-                    data.write_le(&channels);
+                    data.write_le(0x0000u16); //Success
+                    data.write_le(channels);
                 }
                 _ => {
                     error!("        Unknown information request: type={:04X}", info_type);
-                    data.write_le(&0x0001u16); //Not supported
+                    data.write_le(0x0001u16); //Not supported
                 }
             }
         })?;
@@ -241,16 +241,16 @@ enum RejectReason {
 
 impl Instruct<LittleEndian> for RejectReason {
     fn write_to_buffer<B: BufferMut + ?Sized>(&self, buffer: &mut B) {
-        match self {
+        match *self {
             RejectReason::CommandNotUnderstood => {
-                buffer.write_le(&0x0000u16);
+                buffer.write_le(0x0000u16);
             },
             RejectReason::SignalingMtuExceeded { actual_mtu } => {
-                buffer.write_le(&0x0001u16);
+                buffer.write_le(0x0001u16);
                 buffer.write_le(actual_mtu);
             }
             RejectReason::InvalidCid { scid, dcid } => {
-                buffer.write_le(&0x0002u16);
+                buffer.write_le(0x0002u16);
                 buffer.write_le(scid);
                 buffer.write_le(dcid);
             }
