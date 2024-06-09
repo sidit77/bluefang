@@ -27,3 +27,4 @@ rubato = "0.15.0"
 ringbuf = "0.4.1"
 anyhow = "1.0.82"
 portable-atomic = { version = "1", features = ["float"] }
+console = "0.15.8"

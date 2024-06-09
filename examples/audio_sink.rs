@@ -1,5 +1,5 @@
 use std::array::from_fn;
-use std::io::BufRead;
+use std::cmp::PartialEq;
 use std::iter::zip;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool};
@@ -7,8 +7,10 @@ use std::sync::atomic::Ordering::SeqCst;
 
 use anyhow::Context;
 use bytes::{Bytes};
+use console::{Key, Term};
 use cpal::{default_host, SampleFormat, Stream, StreamConfig};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use enum_iterator::{all, Sequence};
 use portable_atomic::{AtomicF32};
 use ringbuf::{HeapProd, HeapRb};
 use ringbuf::consumer::Consumer;
@@ -29,7 +31,7 @@ use bluefang::avdtp::{AvdtpBuilder, LocalEndpoint, StreamHandler};
 use bluefang::avdtp::capabilities::{Capability, MediaCodecCapability};
 use bluefang::avdtp::error::ErrorCode;
 use bluefang::avdtp::packets::{MediaType, StreamEndpointType};
-use bluefang::avrcp::{AvrcpBuilder, AvrcpSession, Event, MediaAttributeId, Notification};
+use bluefang::avrcp::{Avrcp, AvrcpSession, Event, MediaAttributeId, Notification};
 use bluefang::avrcp::notifications::CurrentTrack;
 use bluefang::avrcp::sdp::{AvrcpControllerServiceRecord, AvrcpTargetServiceRecord};
 
@@ -57,8 +59,6 @@ async fn main() -> anyhow::Result<()> {
         .with(layer().without_time())
         .with(EnvFilter::from_default_env())
         .init();
-
-    //return play_saved_audio2().await;
 
     Hci::register_firmware_loader(RealTekFirmwareLoader::default()).await;
 
@@ -89,8 +89,7 @@ async fn main() -> anyhow::Result<()> {
                 .with_record(AvrcpControllerServiceRecord::new(0x00010002))
                 .with_record(AvrcpTargetServiceRecord::new(0x00010003))
                 .build())
-            .with_protocol(AvrcpBuilder::default()
-                .build(cloned!([volume] move |session| avrcp_session_handler(volume.clone(), session))))
+            .with_protocol(Avrcp::new(cloned!([volume] move |session| avrcp_session_handler(volume.clone(), session))))
             .with_protocol(AvdtpBuilder::default()
                 .with_endpoint(LocalEndpoint {
                     media_type: MediaType::Audio,
@@ -134,19 +133,11 @@ fn avrcp_session_handler(volume: Arc<AtomicF32>, mut session: AvrcpSession) {
                 Some(Either2::A(command)) => match command {
                     PlayerCommand::Play => session.play().await,
                     PlayerCommand::Pause => session.pause().await,
-                    PlayerCommand::VolumeUp => {
-                        if volume.fetch_update(SeqCst, SeqCst, |v| (v < 1.0).then(|| (v + 0.1).min(1.0))).is_ok() {
-                            session.notify_local_volume_change(volume.load(SeqCst)).await
-                        } else {
-                            Ok(())
-                        }
-                    }
-                    PlayerCommand::VolumeDown => {
-                        if volume.fetch_update(SeqCst, SeqCst, |v| (v > 0.0).then(|| (v - 0.1).max(0.0))).is_ok() {
-                            session.notify_local_volume_change(volume.load(SeqCst)).await
-                        } else {
-                            Ok(())
-                        }
+                    PlayerCommand::VolumeUp | PlayerCommand::VolumeDown => {
+                        let d = if command == PlayerCommand::VolumeUp { 0.1 } else { -0.1 };
+                        let _ = volume.fetch_update(SeqCst, SeqCst, |v| Some((v + d).max(0.0).min(1.0)));
+                        info!("Volume: {}%", (volume.load(SeqCst) * 100.0).round());
+                        session.notify_local_volume_change(volume.load(SeqCst)).await
                     }
                 }.unwrap_or_else(|err| warn!("Failed to send command: {:?}", err)),
                 Some(Either2::B(event)) => match event {
@@ -154,7 +145,10 @@ fn avrcp_session_handler(volume: Arc<AtomicF32>, mut session: AvrcpSession) {
                         retrieve_current_track_info(&session).await
                             .unwrap_or_else(|err| warn!("Failed to retrieve current track info: {}", err));
                     },
-                    Event::VolumeChanged(vol) => volume.store(vol, SeqCst),
+                    Event::VolumeChanged(vol) => {
+                        volume.store(vol, SeqCst);
+                        info!("Volume: {}%", (volume.load(SeqCst) * 100.0).round());
+                    },
                 },
                 None => break
             }
@@ -251,7 +245,7 @@ impl SbcStreamHandler {
             let (_, len) = self.resampler.process_into_buffer(&mut self.input_buffers, &mut self.output_buffers, None).unwrap();
 
             self.interleave_buffer.clear();
-            let volume = self.volume.load(SeqCst).powi(4);
+            let volume = self.volume.load(SeqCst).powi(2);
             for (&l, &r) in zip(&self.output_buffers[0], &self.output_buffers[1]).take(len) {
                 self.interleave_buffer.push((l * volume) as i16);
                 self.interleave_buffer.push((r * volume) as i16);
@@ -347,6 +341,7 @@ impl AudioSession {
 
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Sequence)]
 enum PlayerCommand {
     Play,
     Pause,
@@ -354,25 +349,39 @@ enum PlayerCommand {
     VolumeDown,
 }
 
+impl PlayerCommand {
+    fn hotkey(self) -> Key {
+        match self {
+            PlayerCommand::Play => Key::Char('q'),
+            PlayerCommand::Pause => Key::Char('w'),
+            PlayerCommand::VolumeUp => Key::Char('e'),
+            PlayerCommand::VolumeDown => Key::Char('r'),
+        }
+    }
+}
+
 fn command_reader() -> Receiver<PlayerCommand> {
     static IN_USE: AtomicBool = AtomicBool::new(false);
-    assert!(!IN_USE.swap(true, std::sync::atomic::Ordering::SeqCst), "command_reader must be called only once");
+    assert!(!IN_USE.swap(true, SeqCst), "command_reader must be called only once");
     let (tx, rx) = tokio::sync::mpsc::channel(10);
     std::thread::spawn(move || {
-        let stdin = std::io::stdin();
-        for line in std::io::BufReader::new(stdin.lock()).lines() {
-            let res = match line.expect("Failed to read line").to_lowercase().as_str() {
-                "play" => tx.blocking_send(PlayerCommand::Play),
-                "pause" => tx.blocking_send(PlayerCommand::Pause),
-                "vol+" => tx.blocking_send(PlayerCommand::VolumeUp),
-                "vol-" => tx.blocking_send(PlayerCommand::VolumeDown),
-                _ => continue,
-            };
-            if res.is_err() {
-                break;
+        let term = Term::stdout();
+        term.write_line("Press 'h' for help").unwrap();
+        while let Ok(key) = term.read_key() {
+            let command = all::<PlayerCommand>()
+                .find(|command| command.hotkey() == key);
+            match command {
+                Some(command) => if tx.blocking_send(command).is_err() { break; },
+                None if key == Key::Char('h') => {
+                    term.write_line("Hotkeys:").unwrap();
+                    for command in all::<PlayerCommand>() {
+                        term.write_line(&format!("  {:?}: {:?}", command.hotkey(), command)).unwrap();
+                    }
+                }
+                None => continue,
             }
         }
-        IN_USE.store(false, std::sync::atomic::Ordering::SeqCst);
+        IN_USE.store(false, SeqCst);
     });
     rx
 }

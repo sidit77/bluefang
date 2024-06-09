@@ -27,20 +27,6 @@ mod session;
 pub use session::{AvrcpSession, SessionError, Event, Notification, notifications};
 pub use packets::{EventId, MediaAttributeId};
 
-
-
-#[derive(Default)]
-pub struct AvrcpBuilder;
-
-impl AvrcpBuilder {
-    pub fn build<F: FnMut(AvrcpSession) + Send + 'static>(self, handler: F) -> Avrcp {
-        Avrcp {
-            existing_connections: Arc::new(Mutex::new(BTreeSet::new())),
-            session_handler: Arc::new(Mutex::new(handler)),
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct Avrcp {
     existing_connections: Arc<Mutex<BTreeSet<u16>>>,
@@ -56,7 +42,15 @@ impl ProtocolHandlerProvider for Avrcp {
 }
 
 impl Avrcp {
-    pub fn handle_control(&self, mut channel: Channel) {
+
+    pub fn new<F: FnMut(AvrcpSession) + Send + 'static>(handler: F) -> Self {
+        Self {
+            existing_connections: Arc::new(Mutex::new(BTreeSet::new())),
+            session_handler: Arc::new(Mutex::new(handler)),
+        }
+    }
+
+    fn handle_control(&self, mut channel: Channel) {
         let handle = channel.connection_handle;
         let success = self.existing_connections.lock().insert(handle);
         if success {
@@ -192,9 +186,12 @@ impl State {
                                 .then(|| self.outstanding_transactions[transaction] = TransactionState::PendingNotificationRegistration(parser, sender));
                         }
                         AvrcpCommand::UpdatedVolume(volume) => {
-                            self.volume = (volume.min(MAX_VOLUME as f32).max(0.0) * MAX_VOLUME as f32).round() as u8;
-                            if let Some(transaction) = self.registered_notifications.remove(&EventId::VolumeChanged) {
-                                self.send_avrcp(transaction, CommandCode::Changed, Pdu::RegisterNotification, (EventId::VolumeChanged, self.volume));
+                            let new_volume = (volume.min(1.0).max(0.0) * MAX_VOLUME as f32).round() as u8;
+                            if new_volume != self.volume {
+                                self.volume = new_volume;
+                                if let Some(transaction) = self.registered_notifications.remove(&EventId::VolumeChanged) {
+                                    self.send_avrcp(transaction, CommandCode::Changed, Pdu::RegisterNotification, (EventId::VolumeChanged, self.volume));
+                                }
                             }
                         }
                     }
