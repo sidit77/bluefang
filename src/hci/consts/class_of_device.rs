@@ -1,8 +1,10 @@
 use std::fmt::{Debug, Formatter};
+
 use bitflags::bitflags;
-use instructor::{Buffer, BufferMut, Endian, Error, Exstruct, Instruct};
 use instructor::utils::u24;
+use instructor::{Buffer, BufferMut, Endian, Error, Exstruct, Instruct};
 use num_enum::{FromPrimitive, IntoPrimitive};
+
 use crate::utils::DebugFn;
 
 /// Class of Device ([Assigned Numbers] Section 2.8).
@@ -10,15 +12,16 @@ use crate::utils::DebugFn;
 pub struct ClassOfDevice {
     pub major_service_classes: MajorServiceClasses,
     pub major_device_classes: MajorDeviceClass,
-    pub minor_device_classes: u8,
+    pub minor_device_classes: u8
 }
 
 impl Debug for ClassOfDevice {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ClassOfDevice")
-            .field("major_service_classes", &DebugFn(|f| {
-                bitflags::parser::to_writer(&self.major_service_classes, f)
-            }))
+            .field(
+                "major_service_classes",
+                &DebugFn(|f| bitflags::parser::to_writer(&self.major_service_classes, f))
+            )
             .field("major_device_classes", &self.major_device_classes)
             .field("minor_device_classes", &self.minor_device_classes)
             .finish()
@@ -30,16 +33,14 @@ impl From<u32> for ClassOfDevice {
         Self {
             major_service_classes: MajorServiceClasses::from_bits_truncate((value >> 13) as u16),
             major_device_classes: MajorDeviceClass::from(((value >> 8) & 0x1F) as u8),
-            minor_device_classes: (value & 0xFF) as u8,
+            minor_device_classes: (value & 0xFF) as u8
         }
     }
 }
 
 impl From<ClassOfDevice> for u32 {
     fn from(value: ClassOfDevice) -> Self {
-        (value.major_service_classes.bits() as u32) << 13 |
-            (value.major_device_classes as u32) << 8 |
-            (value.minor_device_classes as u32)
+        (value.major_service_classes.bits() as u32) << 13 | (value.major_device_classes as u32) << 8 | (value.minor_device_classes as u32)
     }
 }
 
@@ -89,7 +90,7 @@ pub enum MajorDeviceClass {
     Toy = 0x08,
     Health = 0x09,
     #[num_enum(default)]
-    Uncategorized = 0x1F,
+    Uncategorized = 0x1F
 }
 
 //TODO create enums for all the minor classes

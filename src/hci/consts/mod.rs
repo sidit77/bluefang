@@ -1,13 +1,12 @@
-
-mod events;
 mod class_of_device;
+mod events;
 
 use std::fmt::{Debug, Display, Formatter};
-use instructor::{BufferMut, Endian, Exstruct, Instruct};
-use instructor::utils::u24;
 
-pub use events::*;
 pub use class_of_device::*;
+pub use events::*;
+use instructor::utils::u24;
+use instructor::{BufferMut, Endian, Exstruct, Instruct};
 
 /// Bluetooth Core Specification versions ([Assigned Numbers] Section 2.1).
 #[derive(Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd, Exstruct)]
@@ -29,7 +28,7 @@ pub enum CoreVersion {
     V5_3 = 0x0C,
     V5_4 = 0x0D,
     #[default]
-    Unknown = 0xFF,
+    Unknown = 0xFF
 }
 
 impl Debug for CoreVersion {
@@ -49,7 +48,7 @@ impl Debug for CoreVersion {
             Self::V5_2 => "v5.2",
             Self::V5_3 => "v5.3",
             Self::V5_4 => "v5.4",
-            Self::Unknown => "<unknown version>",
+            Self::Unknown => "<unknown version>"
         })
     }
 }
@@ -65,7 +64,7 @@ pub struct CompanyId(pub u16);
 #[repr(u32)]
 pub enum Lap {
     Limited = 0x9E8B00,
-    General = 0x9E8B33,
+    General = 0x9E8B33
 }
 
 impl<E: Endian> Instruct<E> for Lap {
@@ -88,7 +87,7 @@ pub enum LinkType {
 #[repr(u8)]
 pub enum Role {
     Master = 0x00,
-    Slave = 0x01,
+    Slave = 0x01
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Exstruct, Instruct)]
@@ -96,10 +95,12 @@ pub struct RemoteAddr([u8; 6]);
 
 impl Display for RemoteAddr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-               self.0[5], self.0[4], self.0[3], self.0[2], self.0[1], self.0[0])
+        write!(
+            f,
+            "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+            self.0[5], self.0[4], self.0[3], self.0[2], self.0[1], self.0[0]
+        )
     }
-
 }
 
 impl From<[u8; 6]> for RemoteAddr {
@@ -132,7 +133,7 @@ pub enum LinkKeyType {
     AuthenticatedCombinationP192 = 0x03,
     ChangedCombination = 0x04,
     UnauthenticatedCombinationP256 = 0x05,
-    AuthenticatedCombinationP256 = 0x06,
+    AuthenticatedCombinationP256 = 0x06
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Exstruct, Instruct)]
@@ -141,7 +142,7 @@ pub enum IoCapability {
     DisplayOnly = 0x00,
     DisplayYesNo = 0x01,
     KeyboardOnly = 0x02,
-    NoInputNoOutput = 0x03,
+    NoInputNoOutput = 0x03
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Exstruct, Instruct)]
 #[repr(u8)]
@@ -151,7 +152,7 @@ pub enum AuthenticationRequirements {
     DedicatedBondingUnprotected = 0x02,
     DedicatedBondingProtected = 0x03,
     GeneralBondingUnprotected = 0x04,
-    GeneralBondingProtected = 0x05,
+    GeneralBondingProtected = 0x05
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Exstruct, Instruct)]
@@ -160,7 +161,7 @@ pub enum OobDataPresence {
     NotPresent = 0x00,
     P192Present = 0x01,
     P256Present = 0x02,
-    P196AndP256Present = 0x03,
+    P196AndP256Present = 0x03
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Exstruct, Instruct)]
@@ -170,5 +171,5 @@ pub enum KeypressNotificationType {
     DigitEntered = 0x01,
     DigitErased = 0x02,
     Cleared = 0x03,
-    EntryCompleted = 0x04,
+    EntryCompleted = 0x04
 }

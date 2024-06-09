@@ -1,7 +1,8 @@
 use bytes::{BufMut, Bytes, BytesMut};
-use instructor::{Exstruct, Instruct};
 use instructor::utils::Length;
+use instructor::{Exstruct, Instruct};
 use tracing::warn;
+
 // use crate::l2cap::Error;
 use crate::utils::SliceExt;
 
@@ -9,17 +10,14 @@ use crate::utils::SliceExt;
 pub struct AclDataAssembler {
     buffer: BytesMut,
     l2cap_pdu_length: usize,
-    in_progress: bool,
+    in_progress: bool
 }
 
 impl AclDataAssembler {
     pub fn push(&mut self, header: AclHeader, data: Bytes) -> Option<Bytes> {
         if header.pb.is_first() {
             debug_assert!(!self.in_progress);
-            if let Some(l2cap_pdu_length) = data
-                .get_chunk(0)
-                .copied()
-                .map(u16::from_le_bytes) {
+            if let Some(l2cap_pdu_length) = data.get_chunk(0).copied().map(u16::from_le_bytes) {
                 self.buffer.clear();
                 self.buffer.put(data);
                 self.l2cap_pdu_length = l2cap_pdu_length as usize;
@@ -71,7 +69,7 @@ pub struct AclHeader {
 pub enum BoundaryFlag {
     FirstNonAutomaticallyFlushable = 0b00,
     Continuing = 0b01,
-    FirstAutomaticallyFlushable = 0b10,
+    FirstAutomaticallyFlushable = 0b10
 }
 
 impl BoundaryFlag {
@@ -85,5 +83,5 @@ impl BoundaryFlag {
 #[repr(u8)]
 pub enum BroadcastFlag {
     PointToPoint = 0b00,
-    BrEdrBroadcast = 0b01,
+    BrEdrBroadcast = 0b01
 }

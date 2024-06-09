@@ -15,7 +15,6 @@ impl<T> MutexCell<T> {
     pub fn set(&self, value: T) {
         *self.0.lock() = value;
     }
-
 }
 
 impl<T: Copy> MutexCell<T> {

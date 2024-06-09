@@ -1,22 +1,24 @@
 use bytes::BufMut;
-use instructor::{BufferMut};
-use crate::hci::{Error, Hci};
+use instructor::BufferMut;
+
 use crate::hci::commands::{Opcode, OpcodeGroup};
 use crate::hci::consts::{ClassOfDevice, EventMask};
+use crate::hci::{Error, Hci};
 
 /// Controller and baseband commands ([Vol 4] Part E, Section 7.3).
 impl Hci {
-
     pub async fn set_event_mask(&self, mask: EventMask) -> Result<(), Error> {
         self.call_with_args(Opcode::new(OpcodeGroup::HciControl, 0x0001), |p| {
             p.write_le(mask);
-        }).await
+        })
+        .await
     }
 
     /// Resets the controller's link manager, baseband, and link layer
     /// ([Vol 4] Part E, Section 7.3.2).
     pub async fn reset(&self) -> Result<(), Error> {
-        self.call(Opcode::new(OpcodeGroup::HciControl, 0x0003)).await
+        self.call(Opcode::new(OpcodeGroup::HciControl, 0x0003))
+            .await
     }
 
     /// Sets the user-friendly name for the BR/EDR controller
@@ -26,7 +28,8 @@ impl Hci {
         self.call_with_args(Opcode::new(OpcodeGroup::HciControl, 0x0013), |p| {
             p.put_slice(name.as_bytes());
             p.put_bytes(0, 248 - name.len());
-        }).await
+        })
+        .await
     }
 
     /// Makes this device discoverable and/or connectable
@@ -34,7 +37,8 @@ impl Hci {
     pub async fn set_scan_enabled(&self, connectable: bool, discoverable: bool) -> Result<(), Error> {
         self.call_with_args(Opcode::new(OpcodeGroup::HciControl, 0x001A), |p| {
             p.write_le(u8::from(connectable) << 1 | u8::from(discoverable));
-        }).await
+        })
+        .await
     }
 
     /// Sets the class of device
@@ -42,21 +46,23 @@ impl Hci {
     pub async fn write_class_of_device(&self, cod: ClassOfDevice) -> Result<(), Error> {
         self.call_with_args(Opcode::new(OpcodeGroup::HciControl, 0x0024), |p| {
             p.write_le(cod);
-        }).await
+        })
+        .await
     }
 
     /// ([Vol 4] Part E, Section 7.3.59).
     pub async fn set_simple_pairing_support(&self, enabled: bool) -> Result<(), Error> {
         self.call_with_args(Opcode::new(OpcodeGroup::HciControl, 0x0056), |p| {
             p.write_le(enabled);
-        }).await
+        })
+        .await
     }
 
     /// ([Vol 4] Part E, Section 7.3.92).
     pub async fn set_secure_connections_support(&self, enabled: bool) -> Result<(), Error> {
         self.call_with_args(Opcode::new(OpcodeGroup::HciControl, 0x007A), |p| {
             p.write_le(enabled);
-        }).await
+        })
+        .await
     }
-
 }

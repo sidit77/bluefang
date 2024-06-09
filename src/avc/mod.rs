@@ -1,4 +1,5 @@
 use instructor::{BigEndian, Buffer, BufferMut, Error, Exstruct, Instruct};
+
 use crate::ensure;
 
 // ([AVC] Section 7.1)
@@ -9,7 +10,7 @@ pub struct Frame {
     #[instructor(bits(0..4))]
     pub ctype: CommandCode,
     pub subunit: Subunit,
-    pub opcode: Opcode,
+    pub opcode: Opcode
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Instruct, Exstruct)]
@@ -29,7 +30,7 @@ pub enum CommandCode {
     InTransition = 0x0B,
     Implemented = 0x0C,
     Changed = 0x0D,
-    Interim = 0x0F,
+    Interim = 0x0F
 }
 
 impl CommandCode {
@@ -55,7 +56,7 @@ pub enum SubunitType {
     CameraStorage = 0x0B,
     VendorUnique = 0x1C,
     Extended = 0x1E,
-    Unit = 0x1F,
+    Unit = 0x1F
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Instruct, Exstruct)]
@@ -152,7 +153,7 @@ pub enum PassThroughOp {
     F3 = 0x73,
     F4 = 0x74,
     F5 = 0x75,
-    VendorUnique = 0x7E,
+    VendorUnique = 0x7E
 }
 
 // ([AVC Panel] Section 9.4)
@@ -160,7 +161,7 @@ pub enum PassThroughOp {
 #[repr(u8)]
 pub enum PassThroughState {
     Pressed = 0x00,
-    Released = 0x01,
+    Released = 0x01
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Instruct, Exstruct)]
@@ -171,7 +172,7 @@ pub struct PassThroughFrame {
     pub state: PassThroughState,
     #[instructor(bits(0..7))]
     pub op: PassThroughOp,
-    pub data_len: u8,
+    pub data_len: u8
 }
 
 #[derive(Copy, Clone, Instruct, Exstruct)]
@@ -180,7 +181,7 @@ struct SubunitHeader {
     #[instructor(bits(3..8))]
     ty: SubunitType,
     #[instructor(bits(0..3))]
-    id: u8,
+    id: u8
 }
 
 // ([AVC] Section 7.3.4)
@@ -192,7 +193,7 @@ pub struct Subunit {
 
 impl Exstruct<BigEndian> for Subunit {
     fn read_from_buffer<B: Buffer>(buffer: &mut B) -> Result<Self, Error> {
-        let SubunitHeader { ty, id} = buffer.read_be()?;
+        let SubunitHeader { ty, id } = buffer.read_be()?;
         //TODO support this
         ensure!(ty != SubunitType::Extended, Error::InvalidValue);
         ensure!(id != 6, Error::InvalidValue);
@@ -233,14 +234,33 @@ impl Instruct<BigEndian> for Subunit {
 mod tests {
     use bytes::{Buf, Bytes, BytesMut};
     use instructor::{Buffer, BufferMut};
+
     use crate::avc::{CommandCode, Frame, Opcode, Subunit, SubunitType};
 
     #[test]
     fn subunit_parsing() {
         let testcases: [(_, &[u8]); 3] = [
-            (Subunit { ty: SubunitType::Monitor, id: 003 }, &[0b011]),
-            (Subunit { ty: SubunitType::Monitor, id: 007 }, &[0b101, 0b00000010]),
-            (Subunit { ty: SubunitType::Monitor, id: 260 }, &[0b101, 0b11111111, 0b1]),
+            (
+                Subunit {
+                    ty: SubunitType::Monitor,
+                    id: 003
+                },
+                &[0b011]
+            ),
+            (
+                Subunit {
+                    ty: SubunitType::Monitor,
+                    id: 007
+                },
+                &[0b101, 0b00000010]
+            ),
+            (
+                Subunit {
+                    ty: SubunitType::Monitor,
+                    id: 260
+                },
+                &[0b101, 0b11111111, 0b1]
+            )
         ];
 
         let mut buf = BytesMut::new();
@@ -257,11 +277,16 @@ mod tests {
     fn parse_frame() {
         let mut buf = Bytes::from_static(&[0x03, 0x48, 0x00]);
         let frame: Frame = buf.read_be().unwrap();
-        assert_eq!(frame, Frame {
-            ctype: CommandCode::Notify,
-            subunit: Subunit { ty: SubunitType::Panel, id: 0 },
-            opcode: Opcode::VendorDependent,
-        });
+        assert_eq!(
+            frame,
+            Frame {
+                ctype: CommandCode::Notify,
+                subunit: Subunit {
+                    ty: SubunitType::Panel,
+                    id: 0
+                },
+                opcode: Opcode::VendorDependent
+            }
+        );
     }
-
 }

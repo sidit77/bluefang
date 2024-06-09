@@ -1,33 +1,33 @@
+mod commands;
 pub mod consts;
 mod error;
-mod commands;
 // pub mod connection;
 pub mod acl;
-mod event_loop;
-pub mod connection;
 pub mod btsnoop;
+pub mod connection;
+mod event_loop;
 
 use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
+
 use bytes::{BufMut, Bytes, BytesMut};
-use instructor::{Buffer, BufferMut, Exstruct, LittleEndian};
+pub use commands::*;
 use instructor::utils::Length;
+use instructor::{Buffer, BufferMut, Exstruct, LittleEndian};
 use nusb::transfer::TransferError;
 use parking_lot::Mutex;
 use tokio::spawn;
-use tokio::task::JoinHandle;
-use tracing::{debug, error};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender as MpscSender};
+use tokio::task::JoinHandle;
 use tokio::time::sleep;
-use crate::host::usb::UsbHost;
-use crate::hci::consts::{EventCode, EventMask, Status};
+use tracing::{debug, error};
 
-pub use commands::*;
 use crate::hci::acl::{AclHeader, BoundaryFlag, BroadcastFlag};
+use crate::hci::consts::{EventCode, EventMask, Status};
 use crate::hci::event_loop::{CmdResultSender, EventLoopCommand};
-
+use crate::host::usb::UsbHost;
 
 //TODO make generic over transport
 pub struct Hci {
@@ -81,16 +81,15 @@ impl Hci {
         debug_assert!(!events.is_empty());
         debug_assert!(!events.contains(&EventCode::CommandComplete));
         debug_assert!(!events.contains(&EventCode::CommandStatus));
-        self.ctl_out.send(EventLoopCommand::RegisterHciEventHandler {
-            events,
-            handler
-        }).map_err(|_| Error::EventLoopClosed)
+        self.ctl_out
+            .send(EventLoopCommand::RegisterHciEventHandler { events, handler })
+            .map_err(|_| Error::EventLoopClosed)
     }
 
     pub fn register_data_handler(&self, handler: MpscSender<Bytes>) -> Result<(), Error> {
-        self.ctl_out.send(EventLoopCommand::RegisterAclDataHandler {
-            handler
-        }).map_err(|_| Error::EventLoopClosed)
+        self.ctl_out
+            .send(EventLoopCommand::RegisterAclDataHandler { handler })
+            .map_err(|_| Error::EventLoopClosed)
     }
 
     pub fn get_acl_sender(&self) -> AclSender {
@@ -114,7 +113,9 @@ impl Hci {
         buf[2] = payload_len;
 
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.cmd_out.send((cmd, buf.freeze(), tx)).map_err(|_| Error::EventLoopClosed)?;
+        self.cmd_out
+            .send((cmd, buf.freeze(), tx))
+            .map_err(|_| Error::EventLoopClosed)?;
         //TODO: 1s timeout
         let mut resp = rx.await.map_err(|_| Error::EventLoopClosed)??;
         let status: Status = resp.read_le()?;
@@ -132,7 +133,9 @@ impl Hci {
         let handle = self.event_loop.lock().take();
         if let Some(event_loop) = handle {
             self.reset().await?;
-            self.ctl_out.send(EventLoopCommand::Shutdown).map_err(|_| Error::EventLoopClosed)?;
+            self.ctl_out
+                .send(EventLoopCommand::Shutdown)
+                .map_err(|_| Error::EventLoopClosed)?;
             event_loop.await.unwrap();
             sleep(Duration::from_millis(100)).await;
         } else {
@@ -140,7 +143,6 @@ impl Hci {
         }
         Ok(())
     }
-
 }
 #[derive(Clone)]
 pub struct AclSender {
@@ -161,7 +163,9 @@ impl AclSender {
                 length: Length::new(chunk.len())?
             });
             buffer.put(chunk);
-            self.sender.send(buffer.split().freeze()).map_err(|_| Error::EventLoopClosed)?;
+            self.sender
+                .send(buffer.split().freeze())
+                .map_err(|_| Error::EventLoopClosed)?;
             pb = BoundaryFlag::Continuing;
         }
         Ok(())
@@ -198,7 +202,7 @@ pub enum Error {
     #[error(transparent)]
     Controller(#[from] Status),
     #[error("Unknown channel id: 0x{0:02X}")]
-    UnknownChannelId(u16),
+    UnknownChannelId(u16)
 }
 
 impl Error {
@@ -217,12 +221,11 @@ impl From<&'static str> for Error {
 }
 
 pub trait FirmwareLoader {
-    fn try_load_firmware<'a>(&'a self, hci: &'a Hci) -> Pin<Box<dyn Future<Output=Result<bool, Error>> + Send + 'a>>;
+    fn try_load_firmware<'a>(&'a self, hci: &'a Hci) -> Pin<Box<dyn Future<Output = Result<bool, Error>> + Send + 'a>>;
 }
 
 static FIRMWARE_LOADERS: tokio::sync::Mutex<Vec<Box<dyn FirmwareLoader + Send>>> = tokio::sync::Mutex::const_new(Vec::new());
 impl Hci {
-
     pub async fn register_firmware_loader<FL: FirmwareLoader + Send + 'static>(loader: FL) {
         FIRMWARE_LOADERS.lock().await.push(Box::new(loader));
     }
@@ -236,6 +239,4 @@ impl Hci {
             }
         }
     }
-
 }
-

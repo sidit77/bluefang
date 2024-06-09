@@ -1,15 +1,16 @@
 use bytes::{BufMut, Bytes, BytesMut};
-use instructor::{Buffer, BufferMut, DoubleEndedBufferMut, Exstruct, Instruct, LittleEndian};
 use instructor::utils::Length;
+use instructor::{Buffer, BufferMut, DoubleEndedBufferMut, Exstruct, Instruct, LittleEndian};
 use tracing::{debug, error, warn};
-use crate::{ensure, log_assert};
+
 use crate::hci::Error;
-use crate::l2cap::{ChannelEvent, CID_ID_SIGNALING, ConfigureResult, ConnectionResult, ConnectionStatus, L2capHeader, State};
+use crate::l2cap::{ChannelEvent, ConfigureResult, ConnectionResult, ConnectionStatus, L2capHeader, State, CID_ID_SIGNALING};
+use crate::{ensure, log_assert};
 
 #[derive(Debug, Copy, Clone)]
 struct SignalingContext {
     handle: u16,
-    id: u8,
+    id: u8
 }
 
 impl State {
@@ -19,11 +20,11 @@ impl State {
         data.write_front(SignalingHeader {
             code,
             id: ctx.id,
-            length: Length::new(data.len())?,
+            length: Length::new(data.len())?
         });
         data.write_front(L2capHeader {
             len: Length::new(data.len())?,
-            cid: CID_ID_SIGNALING,
+            cid: CID_ID_SIGNALING
         });
         self.sender.send(ctx.handle, data.freeze())?;
         Ok(())
@@ -41,7 +42,7 @@ impl State {
                 let reason: RejectReason = data.read()?;
                 data.finish()?;
                 error!("        Command reject: {:?}", reason);
-            },
+            }
             SignalingCodes::ConnectionRequest => self.handle_connection_request(ctx, data)?,
             SignalingCodes::ConfigureRequest => self.handle_configuration_request(ctx, data)?,
             SignalingCodes::ConfigureResponse => self.handle_configuration_response(ctx, data)?,
@@ -53,12 +54,12 @@ impl State {
                 self.send_response(ctx, SignalingCodes::CommandReject, |data| {
                     data.write_le(RejectReason::CommandNotUnderstood);
                 })?;
-            },
+            }
         };
         Ok(())
     }
 
-     // ([Vol 3] Part A, Section 4.2).
+    // ([Vol 3] Part A, Section 4.2).
     fn handle_connection_request(&mut self, ctx: SignalingContext, mut data: Bytes) -> Result<(), Error> {
         let psm: u64 = data.read_le::<Psm>()?.0;
         let scid: u16 = data.read_le()?;
@@ -145,7 +146,7 @@ impl State {
 
                     data.write_le(0x0000u16); //Success
                     data.write_le(features);
-                },
+                }
                 0x0003 => {
                     debug!("        Fixed channels supported");
                     // ([Vol 3] Part A, Section 4.13).
@@ -165,9 +166,7 @@ impl State {
         })?;
         Ok(())
     }
-
 }
-
 
 // ([Vol 3] Part A, Section 4).
 #[derive(Debug, Exstruct, Instruct)]
@@ -201,7 +200,7 @@ pub enum SignalingCodes {
     CreditBasedConnectionRequest = 0x17,
     CreditBasedConnectionResponse = 0x18,
     CreditBasedReconfigurationRequest = 0x19,
-    CreditBasedReconfigurationResponse = 0x1A,
+    CreditBasedReconfigurationResponse = 0x1A
 }
 
 // ([Vol 3] Part A, Section 4.2).
@@ -230,13 +229,8 @@ impl Exstruct<LittleEndian> for Psm {
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 enum RejectReason {
     CommandNotUnderstood,
-    SignalingMtuExceeded {
-        actual_mtu: u16
-    },
-    InvalidCid {
-        scid: u16,
-        dcid: u16
-    },
+    SignalingMtuExceeded { actual_mtu: u16 },
+    InvalidCid { scid: u16, dcid: u16 }
 }
 
 impl Instruct<LittleEndian> for RejectReason {
@@ -244,7 +238,7 @@ impl Instruct<LittleEndian> for RejectReason {
         match *self {
             RejectReason::CommandNotUnderstood => {
                 buffer.write_le(0x0000u16);
-            },
+            }
             RejectReason::SignalingMtuExceeded { actual_mtu } => {
                 buffer.write_le(0x0001u16);
                 buffer.write_le(actual_mtu);
@@ -258,9 +252,7 @@ impl Instruct<LittleEndian> for RejectReason {
     }
 }
 
-
 impl Exstruct<LittleEndian> for RejectReason {
-
     fn read_from_buffer<B: Buffer + ?Sized>(buffer: &mut B) -> Result<Self, instructor::Error> {
         let reason: u16 = buffer.read_le()?;
         match reason {
@@ -268,14 +260,13 @@ impl Exstruct<LittleEndian> for RejectReason {
             0x0001 => {
                 let actual_mtu: u16 = buffer.read_le()?;
                 Ok(RejectReason::SignalingMtuExceeded { actual_mtu })
-            },
+            }
             0x0002 => {
                 let scid: u16 = buffer.read_le()?;
                 let dcid: u16 = buffer.read_le()?;
                 Ok(RejectReason::InvalidCid { scid, dcid })
-            },
+            }
             _ => Err(instructor::Error::InvalidValue)
         }
     }
 }
-

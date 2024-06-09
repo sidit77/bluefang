@@ -1,16 +1,18 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
+
 use bytes::{BufMut, Bytes, BytesMut};
-use instructor::{Buffer, BufferMut, DoubleEndedBufferMut};
 use instructor::utils::Length;
-use tokio::sync::mpsc::{UnboundedReceiver as MpscReceiver};
+use instructor::{Buffer, BufferMut, DoubleEndedBufferMut};
+use tokio::sync::mpsc::UnboundedReceiver as MpscReceiver;
 use tokio::time::sleep;
 use tracing::{trace, warn};
+
 use crate::ensure;
 use crate::hci::{AclSender, Error};
-use crate::l2cap::{ChannelEvent, CID_ID_SIGNALING, ConfigureResult, L2capHeader};
 use crate::l2cap::signaling::{SignalingCodes, SignalingHeader};
+use crate::l2cap::{ChannelEvent, ConfigureResult, L2capHeader, CID_ID_SIGNALING};
 
 const DEFAULT_MTU: u16 = 1691;
 
@@ -22,20 +24,19 @@ pub struct Channel {
     pub sender: AclSender,
     pub next_signaling_id: Arc<AtomicU8>,
     pub local_mtu: u16,
-    pub remote_mtu: u16,
+    pub remote_mtu: u16
 }
 
 impl Channel {
-
     fn send_configure_signal(&self, code: SignalingCodes, id: u8, mut options: BytesMut) -> Result<(), Error> {
         options.write_front(SignalingHeader {
             code,
             id,
-            length: Length::new(options.len())?,
+            length: Length::new(options.len())?
         });
         options.write_front(L2capHeader {
             len: Length::new(options.len())?,
-            cid: CID_ID_SIGNALING,
+            cid: CID_ID_SIGNALING
         });
         self.sender.send(self.connection_handle, options.freeze())?;
         Ok(())
@@ -53,7 +54,12 @@ impl Channel {
         self.send_configure_signal(SignalingCodes::ConfigureRequest, waiting_id, options)?;
 
         while self.local_mtu == 0 || self.remote_mtu == 0 {
-            match self.receiver.recv().await.ok_or(Error::Generic("Configure failed"))? {
+            match self
+                .receiver
+                .recv()
+                .await
+                .ok_or(Error::Generic("Configure failed"))?
+            {
                 ChannelEvent::DataReceived(_) => trace!("Received data while still configuring"),
                 ChannelEvent::ConfigurationRequest(id, mut options) => {
                     let mut resp = BytesMut::new();
@@ -71,7 +77,6 @@ impl Channel {
                         resp.write_le(self.remote_mtu);
                         self.send_configure_signal(SignalingCodes::ConfigureResponse, id, resp)?;
                     }
-
                 }
                 ChannelEvent::ConfigurationResponse(id, result, mut options) => {
                     ensure!(result == ConfigureResult::Success, "Configuration failed");
@@ -105,15 +110,13 @@ impl Channel {
         let mut buffer = BytesMut::new();
         buffer.write_le(L2capHeader {
             len: Length::new(data.len())?,
-            cid: self.remote_cid,
+            cid: self.remote_cid
         });
         buffer.put(data);
         self.sender.send(self.connection_handle, buffer.freeze())?;
         Ok(())
     }
-
 }
-
 
 /*
 let mut return_data = BytesMut::new();

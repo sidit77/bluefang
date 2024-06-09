@@ -1,11 +1,13 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+
 use pin_project_lite::pin_project;
+
 use crate::log_assert;
 
 pub struct SelectAll<'a, T> {
-    futures: &'a mut [T],
+    futures: &'a mut [T]
 }
 
 impl<'a, T: Future + Unpin> Future for SelectAll<'a, T> {
@@ -39,7 +41,6 @@ pin_project! {
 }
 
 impl<F> OptionFuture<F> {
-
     pub const fn never() -> Self {
         OptionFuture::Never
     }
@@ -76,7 +77,7 @@ impl<F: Future> Future for OptionFuture<F> {
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Either2<A, B> {
     A(A),
-    B(B),
+    B(B)
 }
 
 impl<A, B> Either2<Option<A>, Option<B>> {
@@ -101,7 +102,9 @@ pin_project! {
 }
 
 impl<F1, F2> Future for Select2<F1, F2>
-    where F1: Future, F2: Future
+where
+    F1: Future,
+    F2: Future
 {
     type Output = Either2<F1::Output, F2::Output>;
 
@@ -119,7 +122,9 @@ impl<F1, F2> Future for Select2<F1, F2>
 }
 
 pub fn select2<F1, F2>(future1: F1, future2: F2) -> Select2<F1, F2>
-    where F1: Future, F2: Future
+where
+    F1: Future,
+    F2: Future
 {
     Select2 { future1, future2 }
 }

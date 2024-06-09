@@ -1,25 +1,26 @@
 mod data_element;
 mod error;
-mod service;
 pub mod ids;
+mod service;
 
 use std::collections::BTreeMap;
 use std::mem::size_of;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
+
 use bytes::{Bytes, BytesMut};
-use instructor::{BigEndian, Buffer, BufferMut, Exstruct, Instruct};
+pub use data_element::{DataElement, Uuid};
 use instructor::utils::Length;
+use instructor::{BigEndian, Buffer, BufferMut, Exstruct, Instruct};
+pub use service::ServiceAttribute;
 use tokio::spawn;
 use tracing::{error, trace, warn};
-use crate::{ensure, hci};
+
 use crate::l2cap::channel::Channel;
 use crate::l2cap::{ProtocolHandler, SDP_PSM};
 use crate::sdp::error::{Error, SdpErrorCodes};
-use crate::sdp::service::{Service};
-
-pub use data_element::{DataElement, Uuid};
-pub use service::ServiceAttribute;
+use crate::sdp::service::Service;
+use crate::{ensure, hci};
 
 pub trait ServiceRecord {
     fn handle(&self) -> u32;
@@ -32,18 +33,19 @@ pub struct SdpBuilder {
 }
 
 impl SdpBuilder {
-
     pub fn with_record<T: ServiceRecord>(mut self, record: T) -> Self {
         assert!(!(0x00000001..=0x0000FFFF).contains(&record.handle()), "Reserved service record handle");
         assert!(!self.records.contains_key(&record.handle()), "Duplicate service record handle");
-        self.records.insert(record.handle(), Service::from(record.attributes()));
+        self.records
+            .insert(record.handle(), Service::from(record.attributes()));
         self
     }
 
     pub fn build(self) -> Sdp {
-        Sdp { records: Arc::new(self.records) }
+        Sdp {
+            records: Arc::new(self.records)
+        }
     }
-
 }
 
 #[derive(Clone)]
@@ -52,7 +54,9 @@ pub struct Sdp {
 }
 
 impl ProtocolHandler for Sdp {
-    fn psm(&self) -> u64 { SDP_PSM as u64 }
+    fn psm(&self) -> u64 {
+        SDP_PSM as u64
+    }
 
     fn handle(&self, mut channel: Channel) {
         let server = self.clone();
@@ -61,23 +65,25 @@ impl ProtocolHandler for Sdp {
                 warn!("Error configuring channel: {:?}", err);
                 return;
             }
-            server.handle_connection(channel).await.unwrap_or_else(|err| {
-                warn!("Error handling connection: {:?}", err);
-            });
+            server
+                .handle_connection(channel)
+                .await
+                .unwrap_or_else(|err| {
+                    warn!("Error handling connection: {:?}", err);
+                });
             trace!("SDP connection closed");
         });
     }
 }
 
 impl Sdp {
-
     async fn handle_connection(self, mut channel: Channel) -> Result<(), hci::Error> {
         let mut buffer = BytesMut::new();
         while let Some(mut request) = channel.read().await {
-            let Ok(SdpHeader {pdu, transaction_id, ..}) = request
+            let Ok(SdpHeader { pdu, transaction_id, .. }) = request
                 .read()
                 .map_err(|err| error!("malformed request: {}", err))
-                else {
+            else {
                 continue;
             };
             let reply = catch_error(|| match pdu {
@@ -101,9 +107,9 @@ impl Sdp {
                         total_service_record_count: maximum_service_record_count,
                         current_service_record_count: maximum_service_record_count,
                         service_record_handles: attribute_list,
-                        continuation_state: ContinuationState::None,
+                        continuation_state: ContinuationState::None
                     })
-                },
+                }
                 // ([Vol 3] Part B, Section 4.6.1).
                 PduId::AttributeRequest => {
                     let service_record_handle: u32 = request.read_be()?;
@@ -125,7 +131,7 @@ impl Sdp {
                                 .ok_or(Error::UnknownServiceRecordHandle(service_record_handle))?;
 
                             buffer.write(attribute_list);
-                        },
+                        }
                         ContinuationState::Continue => {
                             ensure!(!buffer.is_empty(), Error::InvalidContinuationState);
                         }
@@ -136,7 +142,7 @@ impl Sdp {
                         attribute_list: to_send.freeze(),
                         continuation_state: ContinuationState::last_message(buffer.is_empty())
                     })
-                },
+                }
                 // ([Vol 3] Part B, Section 4.7.1).
                 PduId::SearchAttributeRequest => {
                     let service_search_patterns: DataElement = request.read()?;
@@ -159,7 +165,7 @@ impl Sdp {
                                 .collect::<DataElement>();
 
                             buffer.write(attribute_list);
-                        },
+                        }
                         ContinuationState::Continue => {
                             ensure!(!buffer.is_empty(), Error::InvalidContinuationState);
                         }
@@ -175,7 +181,8 @@ impl Sdp {
                     warn!("Unsupported PDU: {:?}", pdu);
                     Err(Error::InvalidRequest)
                 }
-            }).unwrap_or_else(|err| {
+            })
+            .unwrap_or_else(|err| {
                 error!("Error handling request: {:?}", err);
                 ResponsePacket::Error(SdpErrorCodes::from(err))
             });
@@ -183,7 +190,7 @@ impl Sdp {
             packet.write(SdpHeader {
                 pdu: reply.pdu(),
                 transaction_id,
-                parameter_length: Length::new(reply.byte_size())?,
+                parameter_length: Length::new(reply.byte_size())?
             });
             packet.write(reply);
             channel.write(packet.freeze())?;
@@ -191,15 +198,13 @@ impl Sdp {
         Ok(())
     }
 
-    fn collecting_matching_records<'a: 'b, 'b>(&'a self, service_search_patterns: &'b [Uuid]) -> impl Iterator<Item=(&'a u32, &'a Service)> + 'b {
-        self
-            .records
-            .iter()
-            .filter(move |(_, service)| service_search_patterns
+    fn collecting_matching_records<'a: 'b, 'b>(&'a self, service_search_patterns: &'b [Uuid]) -> impl Iterator<Item = (&'a u32, &'a Service)> + 'b {
+        self.records.iter().filter(move |(_, service)| {
+            service_search_patterns
                 .iter()
-                .any(|&uuid| service.contains(uuid)))
+                .any(|&uuid| service.contains(uuid))
+        })
     }
-
 }
 
 fn collect_attributes(service: &Service, attribute_id_list: &[RangeInclusive<u16>]) -> DataElement {
@@ -220,8 +225,7 @@ fn convert_search_pattern(pattern: DataElement) -> Result<Vec<Uuid>, Error> {
 }
 
 fn convert_attribute_id_list(list: DataElement) -> Result<Vec<RangeInclusive<u16>>, Error> {
-    list
-        .as_sequence()?
+    list.as_sequence()?
         .iter()
         .map(|element| match element {
             DataElement::U16(id) => Ok(*id..=*id),
@@ -236,7 +240,8 @@ fn convert_attribute_id_list(list: DataElement) -> Result<Vec<RangeInclusive<u16
 }
 
 fn catch_error<F, E, R>(f: F) -> Result<R, E>
-    where F: FnOnce() -> Result<R, E>
+where
+    F: FnOnce() -> Result<R, E>
 {
     f()
 }
@@ -246,7 +251,7 @@ fn catch_error<F, E, R>(f: F) -> Result<R, E>
 struct SdpHeader {
     pdu: PduId,
     transaction_id: u16,
-    parameter_length: Length<u16, 0>,
+    parameter_length: Length<u16, 0>
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Exstruct, Instruct)]
@@ -258,7 +263,7 @@ enum PduId {
     AttributeRequest = 0x04,
     AttributeResponse = 0x05,
     SearchAttributeRequest = 0x06,
-    SearchAttributeResponse = 0x07,
+    SearchAttributeResponse = 0x07
 }
 
 #[derive(Debug, Instruct)]
@@ -300,15 +305,21 @@ impl ResponsePacket {
     pub fn byte_size(&self) -> usize {
         match self {
             Self::Error(_) => size_of::<SdpErrorCodes>(),
-            Self::Search { service_record_handles, continuation_state, ..} => {
-                2 * size_of::<u16>() + service_record_handles.len() * size_of::<u32>() + continuation_state.byte_size()
-            },
-            Self::Attribute {attribute_list, continuation_state, ..} => {
-                size_of::<u16>() + attribute_list.len() + continuation_state.byte_size()
-            },
-            Self::SearchAttribute { attribute_list, continuation_state , .. } => {
-                size_of::<u16>() + attribute_list.len() + continuation_state.byte_size()
-            }
+            Self::Search {
+                service_record_handles,
+                continuation_state,
+                ..
+            } => 2 * size_of::<u16>() + service_record_handles.len() * size_of::<u32>() + continuation_state.byte_size(),
+            Self::Attribute {
+                attribute_list,
+                continuation_state,
+                ..
+            } => size_of::<u16>() + attribute_list.len() + continuation_state.byte_size(),
+            Self::SearchAttribute {
+                attribute_list,
+                continuation_state,
+                ..
+            } => size_of::<u16>() + attribute_list.len() + continuation_state.byte_size()
         }
     }
 }
@@ -320,7 +331,6 @@ enum ContinuationState {
 }
 
 impl ContinuationState {
-
     const CONTINUATION_STATE: [u8; 4] = *b"cont";
 
     pub fn last_message(last: bool) -> Self {
@@ -343,7 +353,7 @@ impl Exstruct<BigEndian> for ContinuationState {
             4 => {
                 ensure!(buffer.read_be::<[u8; 4]>()? == Self::CONTINUATION_STATE, instructor::Error::InvalidValue);
                 Ok(Self::Continue)
-            },
+            }
             _ => Err(instructor::Error::InvalidValue)
         }
     }

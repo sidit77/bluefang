@@ -2,8 +2,9 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
-use std::thread::{JoinHandle, spawn};
+use std::thread::{spawn, JoinHandle};
 use std::time::{Duration, SystemTime};
+
 use bytes::Bytes;
 use tracing::{error, info};
 
@@ -15,7 +16,7 @@ const BTSNOOP_FORMAT_MONITOR: u32 = 2001;
 
 pub struct LogWriter {
     sender: Option<Sender<(SystemTime, PacketType, Bytes)>>,
-    thread: Option<JoinHandle<()>>,
+    thread: Option<JoinHandle<()>>
 }
 
 impl LogWriter {
@@ -25,21 +26,16 @@ impl LogWriter {
             Some(path) => {
                 let (sender, receiver) = std::sync::mpsc::channel();
                 let thread = spawn(move || {
-                    Self::writer_thread(path, receiver)
-                        .unwrap_or_else(|err| error!("Failed to write btsnoop log: {:?}", err));
+                    Self::writer_thread(path, receiver).unwrap_or_else(|err| error!("Failed to write btsnoop log: {:?}", err));
                 });
 
                 Self {
                     sender: Some(sender),
-                    thread: Some(thread),
+                    thread: Some(thread)
                 }
             }
-            None => Self {
-                sender: None,
-                thread: None,
-            }
+            None => Self { sender: None, thread: None }
         }
-        
     }
 
     fn writer_thread(path: PathBuf, receiver: Receiver<(SystemTime, PacketType, Bytes)>) -> std::io::Result<()> {

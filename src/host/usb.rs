@@ -1,8 +1,9 @@
-use nusb::{Device, DeviceInfo, Error, Interface};
 use nusb::descriptors::InterfaceAltSetting;
 use nusb::transfer::Direction::{In, Out};
 use nusb::transfer::EndpointType::{Bulk, Interrupt};
+use nusb::{Device, DeviceInfo, Error, Interface};
 use tracing::{debug, warn};
+
 use crate::ensure;
 use crate::utils::IteratorExt;
 
@@ -12,26 +13,26 @@ pub struct UsbController {
 }
 
 impl UsbController {
-
-    pub fn list<F: FnMut(&DeviceInfo) -> bool>(filter: F) -> Result<impl Iterator<Item=UsbController>, Error> {
+    pub fn list<F: FnMut(&DeviceInfo) -> bool>(filter: F) -> Result<impl Iterator<Item = UsbController>, Error> {
         Ok(nusb::list_devices()?
             .filter(filter)
-            .filter_map(|info| info
-                .open()
-                .map_err(|e| warn!("Failed to open device ({e})"))
-                .ok())
-            .filter_map(|device| Endpoints::discover(&device)
-                .map(|endpoints| UsbController { device, endpoints }))
-        )
+            .filter_map(|info| {
+                info.open()
+                    .map_err(|e| warn!("Failed to open device ({e})"))
+                    .ok()
+            })
+            .filter_map(|device| Endpoints::discover(&device).map(|endpoints| UsbController { device, endpoints })))
     }
 
     pub fn claim(self) -> Result<UsbHost, Error> {
         debug!("Claiming main interface");
-        let interface = self.device.detach_and_claim_interface(self.endpoints.main_iface)?;
+        let interface = self
+            .device
+            .detach_and_claim_interface(self.endpoints.main_iface)?;
         Ok(UsbHost {
             device: self.device,
             endpoints: self.endpoints,
-            interface,
+            interface
         })
     }
 }
@@ -48,14 +49,12 @@ pub struct Endpoints {
     pub main_iface: u8,
     pub event: u8,
     pub acl_out: u8,
-    pub acl_in: u8,
+    pub acl_in: u8
 }
 
 impl Endpoints {
-
     fn discover(dev: &Device) -> Option<Self> {
-        dev
-            .active_configuration()
+        dev.active_configuration()
             .map_err(|e| warn!("Failed to get config descriptor ({e})"))
             .ok()?
             .interfaces()
@@ -63,7 +62,12 @@ impl Endpoints {
                 let ifas = ifg.alt_settings().single().filter(Self::is_bluetooth)?;
                 ensure!(ifas.alternate_setting() == 0 && ifas.num_endpoints() == 3);
 
-                let mut r = Endpoints { main_iface: ifas.interface_number(), event: 0, acl_out: 0, acl_in: 0 };
+                let mut r = Endpoints {
+                    main_iface: ifas.interface_number(),
+                    event: 0,
+                    acl_out: 0,
+                    acl_in: 0
+                };
                 for epd in ifas.endpoints() {
                     match (epd.transfer_type(), epd.direction()) {
                         (Interrupt, In) => r.event = epd.address(),
@@ -84,5 +88,4 @@ impl Endpoints {
         // [Vol 4] Part B, Section 3.1
         ifas.class() == 0xE0 && ifas.subclass() == 0x01 && ifas.protocol() == 0x01
     }
-
 }

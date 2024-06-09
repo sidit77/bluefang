@@ -1,14 +1,14 @@
-use instructor::{BigEndian, Buffer, BufferMut, ByteSize, Error, Exstruct, Instruct};
 use instructor::utils::Limit;
-use crate::a2dp::sbc::SbcMediaCodecInformation;
+use instructor::{BigEndian, Buffer, BufferMut, ByteSize, Error, Exstruct, Instruct};
 
+use crate::a2dp::sbc::SbcMediaCodecInformation;
 use crate::avdtp::packets::{AudioCodec, MediaType, ServiceCategory, VideoCodec};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Capability {
     MediaTransport,
     MediaCodec(MediaCodecCapability),
-    Generic(ServiceCategory, Vec<u8>),
+    Generic(ServiceCategory, Vec<u8>)
 }
 
 impl Capability {
@@ -22,7 +22,7 @@ impl Capability {
 pub enum MediaCodec {
     Audio(AudioCodec),
     Video(VideoCodec),
-    Multimedia(u8),
+    Multimedia(u8)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,7 +58,6 @@ impl Exstruct<BigEndian> for Capability {
 }
 
 impl Instruct<BigEndian> for Capability {
-
     #[inline]
     fn write_to_buffer<B: BufferMut>(&self, buffer: &mut B) {
         let (cat, size) = match self {
@@ -83,13 +82,12 @@ impl Exstruct<BigEndian> for MediaCodec {
         Ok(match mt.0 {
             MediaType::Audio => Self::Audio(buffer.read_be()?),
             MediaType::Video => Self::Audio(buffer.read_be()?),
-            MediaType::Multimedia => Self::Multimedia(buffer.read_be()?),
+            MediaType::Multimedia => Self::Multimedia(buffer.read_be()?)
         })
     }
 }
 
 impl Instruct<BigEndian> for MediaCodec {
-
     #[inline]
     fn write_to_buffer<B: BufferMut>(&self, buffer: &mut B) {
         let (t, c) = match self {
@@ -117,7 +115,6 @@ impl Exstruct<BigEndian> for MediaCodecCapability {
 }
 
 impl Instruct<BigEndian> for MediaCodecCapability {
-
     #[inline]
     fn write_to_buffer<B: BufferMut>(&self, buffer: &mut B) {
         match self {
@@ -143,7 +140,7 @@ impl ByteSize for MediaCodecCapability {
 }
 
 #[derive(Clone, Copy, Instruct, Exstruct)]
-struct MediaTypeRaw (
+struct MediaTypeRaw(
     #[instructor(bitfield(u8))]
     #[instructor(bits(4..8))]
     MediaType
@@ -153,16 +150,16 @@ struct MediaTypeRaw (
 mod test {
     use bytes::{Buf, BytesMut};
     use instructor::{Buffer, BufferMut};
-    use crate::a2dp::sbc::SbcMediaCodecInformation;
 
+    use crate::a2dp::sbc::SbcMediaCodecInformation;
     use crate::avdtp::capabilities::{Capability, MediaCodecCapability};
 
     #[test]
     fn test_media_cap() {
-        let packet_bytes: &[u8] = &[0x01, 0x00, 0x07, 0x06, 0x00, 0x00, 0xff, 0xff,  0x02, 0x35];
+        let packet_bytes: &[u8] = &[0x01, 0x00, 0x07, 0x06, 0x00, 0x00, 0xff, 0xff, 0x02, 0x35];
         let capabilites = vec![
             Capability::MediaTransport,
-            Capability::MediaCodec(MediaCodecCapability::Sbc(SbcMediaCodecInformation::default()))
+            Capability::MediaCodec(MediaCodecCapability::Sbc(SbcMediaCodecInformation::default())),
         ];
         let mut buf = BytesMut::new();
         buf.write(&capabilites);
@@ -170,5 +167,4 @@ mod test {
         let read_caps: Vec<Capability> = buf.read().unwrap();
         assert_eq!(read_caps, capabilites);
     }
-
 }

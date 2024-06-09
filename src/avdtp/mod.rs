@@ -1,37 +1,37 @@
-pub mod packets;
-pub mod error;
-pub mod endpoint;
-pub mod utils;
 pub mod capabilities;
+pub mod endpoint;
+pub mod error;
+pub mod packets;
+pub mod utils;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+
 use bytes::{Bytes, BytesMut};
+pub use endpoint::{LocalEndpoint, StreamHandler};
 use instructor::{BigEndian, Buffer, BufferMut, Instruct};
 use parking_lot::Mutex;
-use tokio::{select, spawn};
 use tokio::runtime::Handle;
 use tokio::sync::oneshot::{Receiver, Sender};
+use tokio::{select, spawn};
 use tracing::{debug, trace, warn};
+
+use crate::avdtp::capabilities::Capability;
 use crate::avdtp::endpoint::Stream;
 use crate::avdtp::error::ErrorCode;
 use crate::avdtp::packets::{MessageType, ServiceCategory, SignalChannelExt, SignalIdentifier, SignalMessage, SignalMessageAssembler};
+use crate::ensure;
 use crate::hci::Error;
 use crate::l2cap::channel::Channel;
-use crate::l2cap::{AVDTP_PSM, ProtocolHandler};
-use crate::utils::{MutexCell, OptionFuture, select_all};
-
-pub use endpoint::{StreamHandler, LocalEndpoint};
-use crate::avdtp::capabilities::Capability;
-use crate::ensure;
+use crate::l2cap::{ProtocolHandler, AVDTP_PSM};
+use crate::utils::{select_all, MutexCell, OptionFuture};
 
 #[derive(Default)]
 pub struct AvdtpBuilder {
-    endpoints: Vec<LocalEndpoint>,
+    endpoints: Vec<LocalEndpoint>
 }
 
 impl AvdtpBuilder {
-
     pub fn with_endpoint(mut self, endpoint: LocalEndpoint) -> Self {
         self.endpoints.push(endpoint);
         self
@@ -40,7 +40,7 @@ impl AvdtpBuilder {
     pub fn build(self) -> Avdtp {
         Avdtp {
             pending_streams: Arc::new(Mutex::new(BTreeMap::new())),
-            local_endpoints: self.endpoints.into(),
+            local_endpoints: self.endpoints.into()
         }
     }
 }
@@ -50,11 +50,13 @@ type ChannelSender = MutexCell<Option<Sender<Channel>>>;
 #[derive(Clone)]
 pub struct Avdtp {
     pending_streams: Arc<Mutex<BTreeMap<u16, Arc<ChannelSender>>>>,
-    local_endpoints: Arc<[LocalEndpoint]>,
+    local_endpoints: Arc<[LocalEndpoint]>
 }
 
 impl ProtocolHandler for Avdtp {
-    fn psm(&self) -> u64 { AVDTP_PSM as u64 }
+    fn psm(&self) -> u64 {
+        AVDTP_PSM as u64
+    }
 
     fn handle(&self, mut channel: Channel) {
         let handle = channel.connection_handle;
@@ -64,29 +66,36 @@ impl ProtocolHandler for Avdtp {
                 trace!("New AVDTP session (signaling channel)");
                 let pending_streams = self.pending_streams.clone();
                 let pending_stream = Arc::new(ChannelSender::default());
-                pending_streams.lock().insert(handle, pending_stream.clone());
+                pending_streams
+                    .lock()
+                    .insert(handle, pending_stream.clone());
 
                 let local_endpoints = self.local_endpoints.clone();
 
                 // Use an OS thread instead a tokio task to avoid blocking the runtime with audio processing
                 let runtime = Handle::current();
-                std::thread::spawn(move || runtime.block_on(async move {
-                    if let Err(err) = channel.configure().await {
-                        warn!("Error configuring channel: {:?}", err);
-                        return;
-                    }
-                    let mut session = AvdtpSession {
-                        channel_sender: pending_stream,
-                        channel_receiver: OptionFuture::never(),
-                        local_endpoints,
-                        streams: Vec::new(),
-                    };
-                    session.handle_control_channel(channel).await.unwrap_or_else(|err| {
-                        warn!("Error handling control channel: {:?}", err);
-                    });
-                    trace!("AVDTP signaling session ended for 0x{:04x}", handle);
-                    pending_streams.lock().remove(&handle);
-                }));
+                std::thread::spawn(move || {
+                    runtime.block_on(async move {
+                        if let Err(err) = channel.configure().await {
+                            warn!("Error configuring channel: {:?}", err);
+                            return;
+                        }
+                        let mut session = AvdtpSession {
+                            channel_sender: pending_stream,
+                            channel_receiver: OptionFuture::never(),
+                            local_endpoints,
+                            streams: Vec::new()
+                        };
+                        session
+                            .handle_control_channel(channel)
+                            .await
+                            .unwrap_or_else(|err| {
+                                warn!("Error handling control channel: {:?}", err);
+                            });
+                        trace!("AVDTP signaling session ended for 0x{:04x}", handle);
+                        pending_streams.lock().remove(&handle);
+                    })
+                });
             }
             Some(pending) => {
                 trace!("Existing AVDTP session (transport channel)");
@@ -106,16 +115,14 @@ impl ProtocolHandler for Avdtp {
     }
 }
 
-
 struct AvdtpSession {
     channel_sender: Arc<ChannelSender>,
     channel_receiver: OptionFuture<Receiver<Channel>>,
     local_endpoints: Arc<[LocalEndpoint]>,
-    streams: Vec<Stream>,
+    streams: Vec<Stream>
 }
 
 impl AvdtpSession {
-
     async fn handle_control_channel(&mut self, mut channel: Channel) -> Result<(), Error> {
         let mut assembler = SignalMessageAssembler::default();
         loop {
@@ -152,19 +159,24 @@ impl AvdtpSession {
     }
 
     fn get_endpoint(&self, seid: u8) -> Result<&LocalEndpoint, ErrorCode> {
-        self.local_endpoints.iter()
+        self.local_endpoints
+            .iter()
             .find(|ep| ep.seid == seid)
             .ok_or(ErrorCode::BadAcpSeid)
     }
 
     fn get_stream(&mut self, seid: u8) -> Result<&mut Stream, ErrorCode> {
         #[allow(clippy::obfuscated_if_else)]
-        self.streams.iter_mut()
+        self.streams
+            .iter_mut()
             .find(|stream| stream.local_endpoint == seid)
-            .ok_or_else(|| self.local_endpoints.iter()
-                .any(|ep| ep.seid == seid)
-                .then_some(ErrorCode::BadState)
-                .unwrap_or(ErrorCode::BadAcpSeid))
+            .ok_or_else(|| {
+                self.local_endpoints
+                    .iter()
+                    .any(|ep| ep.seid == seid)
+                    .then_some(ErrorCode::BadState)
+                    .unwrap_or(ErrorCode::BadAcpSeid)
+            })
     }
 
     fn handle_signal_message(&mut self, msg: SignalMessage) -> SignalMessage {
@@ -210,7 +222,12 @@ impl AvdtpSession {
                 data.finish()?;
                 trace!("Got SET_CONFIGURATION request for 0x{:02x} -> 0x{:02x}", acp_seid, int_seid);
                 let ep = self.get_endpoint(acp_seid)?;
-                ensure!(self.streams.iter().all(|stream| stream.local_endpoint != acp_seid), ErrorCode::BadState);
+                ensure!(
+                    self.streams
+                        .iter()
+                        .all(|stream| stream.local_endpoint != acp_seid),
+                    ErrorCode::BadState
+                );
                 self.streams.push(Stream::new(ep, int_seid, capabilities)?);
                 Ok(())
             }),
@@ -229,10 +246,14 @@ impl AvdtpSession {
                 let capabilities: Vec<Capability> = data.read_be()?;
                 data.finish()?;
                 trace!("Got RECONFIGURE request for 0x{:02x}", acp_seid);
-                let ep = self.local_endpoints.iter()
+                let ep = self
+                    .local_endpoints
+                    .iter()
                     .find(|ep| ep.seid == acp_seid)
                     .ok_or(ErrorCode::BadAcpSeid)?;
-                let stream = self.streams.iter_mut()
+                let stream = self
+                    .streams
+                    .iter_mut()
                     .find(|stream| stream.local_endpoint == acp_seid)
                     .ok_or(ErrorCode::BadState)?;
                 stream.reconfigure(capabilities, ep)?;
@@ -290,7 +311,11 @@ impl AvdtpSession {
                 let seid = data.read_be::<u8>()? >> 2;
                 data.finish()?;
                 trace!("Got ABORT request for 0x{:02x}", seid);
-                if let Some(id) = self.streams.iter_mut().position(|stream| stream.local_endpoint == seid) {
+                if let Some(id) = self
+                    .streams
+                    .iter_mut()
+                    .position(|stream| stream.local_endpoint == seid)
+                {
                     self.streams.swap_remove(id);
                 }
                 Ok(())
@@ -305,18 +330,16 @@ impl AvdtpSession {
     }
 }
 
-
 struct SignalMessageResponse {
     transaction_label: u8,
-    signal_identifier: SignalIdentifier,
+    signal_identifier: SignalIdentifier
 }
 
 impl SignalMessageResponse {
-
     pub fn for_msg(msg: &SignalMessage) -> Self {
         Self {
             transaction_label: msg.transaction_label,
-            signal_identifier: msg.signal_identifier,
+            signal_identifier: msg.signal_identifier
         }
     }
 
@@ -326,7 +349,7 @@ impl SignalMessageResponse {
             transaction_label: self.transaction_label,
             message_type: MessageType::GeneralReject,
             signal_identifier: self.signal_identifier,
-            data: Bytes::new(),
+            data: Bytes::new()
         }
     }
 
@@ -335,8 +358,9 @@ impl SignalMessageResponse {
     }
 
     pub fn try_accept<F, C>(&self, err_ctx: C, f: F) -> SignalMessage
-        where F: FnOnce(&mut BytesMut, &mut C) -> Result<(), ErrorCode>,
-              C: Instruct<BigEndian>
+    where
+        F: FnOnce(&mut BytesMut, &mut C) -> Result<(), ErrorCode>,
+        C: Instruct<BigEndian>
     {
         let mut buf = BytesMut::new();
         let mut ctx = err_ctx;
@@ -345,7 +369,7 @@ impl SignalMessageResponse {
                 transaction_label: self.transaction_label,
                 message_type: MessageType::ResponseAccept,
                 signal_identifier: self.signal_identifier,
-                data: buf.freeze(),
+                data: buf.freeze()
             },
             Err(reason) => {
                 warn!("Rejecting signal {:?} because of {:?}", self.signal_identifier, reason);
@@ -356,10 +380,9 @@ impl SignalMessageResponse {
                     transaction_label: self.transaction_label,
                     message_type: MessageType::ResponseReject,
                     signal_identifier: self.signal_identifier,
-                    data: buf.freeze(),
+                    data: buf.freeze()
                 }
-            },
+            }
         }
     }
-
 }

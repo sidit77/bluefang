@@ -1,13 +1,14 @@
 use std::io::Write;
 use std::path::Path;
+
 use bytes::Bytes;
 use tracing::debug;
+
 use crate::avdtp::StreamHandler;
 
 pub struct DebugStreamHandler;
 
 impl StreamHandler for DebugStreamHandler {
-
     fn on_play(&mut self) {
         debug!("Play");
     }
@@ -30,20 +31,15 @@ impl FileDumpHandler {
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
         Self {
             file: std::fs::File::create(path).unwrap(),
-            total: 0,
+            total: 0
         }
     }
 }
 
 impl StreamHandler for FileDumpHandler {
+    fn on_play(&mut self) {}
 
-    fn on_play(&mut self) {
-
-    }
-
-    fn on_stop(&mut self) {
-
-    }
+    fn on_stop(&mut self) {}
 
     fn on_data(&mut self, data: Bytes) {
         let data = &data.as_ref()[1..];

@@ -1,10 +1,12 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::task::{Context, Poll};
+
 use bytes::Bytes;
 use tracing::warn;
+
 use crate::avdtp::capabilities::Capability;
 use crate::avdtp::error::ErrorCode;
 use crate::avdtp::packets::{MediaType, StreamEndpoint, StreamEndpointType};
@@ -20,7 +22,7 @@ pub struct LocalEndpoint {
     pub in_use: Arc<AtomicBool>,
     pub tsep: StreamEndpointType,
     pub capabilities: Vec<Capability>,
-    pub stream_handler_factory: StreamHandlerFactory,
+    pub stream_handler_factory: StreamHandlerFactory
 }
 
 impl LocalEndpoint {
@@ -29,7 +31,7 @@ impl LocalEndpoint {
             seid: self.seid,
             in_use: self.in_use.load(Ordering::SeqCst),
             media_type: self.media_type,
-            tsep: self.tsep,
+            tsep: self.tsep
         }
     }
 }
@@ -40,8 +42,7 @@ enum StreamState {
     Opening,
     Open,
     Streaming,
-    Closing,
-    //Aborting,
+    Closing //Aborting,
 }
 
 pub struct Stream {
@@ -65,7 +66,7 @@ impl Stream {
             capabilities,
             channel: None,
             handler,
-            endpoint_usage_lock: local_endpoint.in_use.clone(),
+            endpoint_usage_lock: local_endpoint.in_use.clone()
         })
     }
 
@@ -123,7 +124,6 @@ impl Stream {
         ensure!(self.state != StreamState::Closing, ErrorCode::BadState);
         Ok(&self.capabilities)
     }
-
 }
 
 impl Drop for Stream {
@@ -147,22 +147,24 @@ impl Future for Stream {
                             } else {
                                 warn!("Data received while not streaming");
                             }
-                        },
+                        }
                         Poll::Ready(Some(_)) => {
                             warn!("Non data packets in configured state");
-                        },
+                        }
                         Poll::Ready(None) => {
                             self.state = StreamState::Closing;
                             self.channel = None;
-                            return Poll::Ready(())
-                        },
-                        Poll::Pending => return Poll::Pending,
+                            return Poll::Ready(());
+                        }
+                        Poll::Pending => return Poll::Pending
                     }
                 }
-                None => return match self.state {
-                    StreamState::Closing => Poll::Ready(()),
-                    _ => Poll::Pending,
-                },
+                None => {
+                    return match self.state {
+                        StreamState::Closing => Poll::Ready(()),
+                        _ => Poll::Pending
+                    };
+                }
             }
         }
     }
@@ -174,5 +176,3 @@ pub trait StreamHandler: 'static {
 
     fn on_data(&mut self, data: Bytes);
 }
-
-

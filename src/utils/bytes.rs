@@ -17,10 +17,16 @@ impl<T> SliceExt<T> for [T] {
 
 pub trait FromStruct {
     fn from_struct<E: Endian, I: Instruct<E>>(value: I) -> Self;
-    fn from_struct_be<I: Instruct<BigEndian>>(value: I) -> Self where Self: Sized {
+    fn from_struct_be<I: Instruct<BigEndian>>(value: I) -> Self
+    where
+        Self: Sized
+    {
         Self::from_struct::<BigEndian, I>(value)
     }
-    fn from_struct_le<I: Instruct<LittleEndian>>(value: I) -> Self where Self: Sized {
+    fn from_struct_le<I: Instruct<LittleEndian>>(value: I) -> Self
+    where
+        Self: Sized
+    {
         Self::from_struct::<LittleEndian, I>(value)
     }
 }

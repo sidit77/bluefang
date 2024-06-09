@@ -5,8 +5,8 @@ use bytes::{Bytes, BytesMut};
 use instructor::{Buffer, BufferMut, Error, Exstruct, Instruct};
 use tracing::warn;
 
-use crate::{ensure, hci};
 use crate::l2cap::channel::Channel;
+use crate::{ensure, hci};
 
 // ([AVDTP] Section 8.6.2).
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Exstruct, Instruct)]
@@ -21,7 +21,7 @@ pub struct StreamEndpoint {
     #[instructor(bits(4..8))]
     pub media_type: MediaType,
     #[instructor(bits(3..4))]
-    pub tsep: StreamEndpointType,
+    pub tsep: StreamEndpointType
 }
 
 // [AVDTP] Section 8.21.1.
@@ -37,7 +37,7 @@ pub enum ServiceCategory {
     HeaderCompression = 0x05,
     Multiplexing = 0x06,
     MediaCodec = 0x07,
-    DelayReporting = 0x08,
+    DelayReporting = 0x08
 }
 
 // ([Assigned Numbers] Section 6.3.1).
@@ -46,7 +46,7 @@ pub enum ServiceCategory {
 pub enum MediaType {
     Audio = 0x00,
     Video = 0x01,
-    Multimedia = 0x02,
+    Multimedia = 0x02
 }
 
 // ([Assigned Numbers] Section 6.5.1).
@@ -58,7 +58,7 @@ pub enum AudioCodec {
     Mpeg24Acc = 0x02,
     MpegdUsac = 0x03,
     Atrac = 0x04,
-    VendorSpecific = 0xFF,
+    VendorSpecific = 0xFF
 }
 
 // ([Assigned Numbers] Section 6.6.1).
@@ -69,7 +69,7 @@ pub enum VideoCodec {
     Mpeg4Visual = 0x01,
     H263Profile3 = 0x02,
     H263Profile8 = 0x03,
-    VendorSpecific = 0xFF,
+    VendorSpecific = 0xFF
 }
 
 // ([Assigned Numbers] Section 6.3.1).
@@ -77,7 +77,7 @@ pub enum VideoCodec {
 #[repr(u8)]
 pub enum StreamEndpointType {
     Source = 0x00,
-    Sink = 0x01,
+    Sink = 0x01
 }
 
 // ([AVDTP] Section 8.4.2).
@@ -87,7 +87,7 @@ enum PacketType {
     Single = 0b00,
     Start = 0b01,
     Continue = 0b10,
-    End = 0b11,
+    End = 0b11
 }
 
 // ([AVDTP] Section 8.4.3).
@@ -98,7 +98,7 @@ pub enum MessageType {
     Command = 0b00,
     GeneralReject = 0b01,
     ResponseAccept = 0b10,
-    ResponseReject = 0b11,
+    ResponseReject = 0b11
 }
 
 // ([AVDTP] Section 8.5).
@@ -120,7 +120,7 @@ pub enum SignalIdentifier {
     Abort = 0x0a,
     SecurityControl = 0x0b,
     GetAllCapabilities = 0x0c,
-    DelayReport = 0x0d,
+    DelayReport = 0x0d
 }
 
 // ([AVDTP] Section 8.4).
@@ -132,14 +132,14 @@ struct SignalHeader {
     #[instructor(bits(2..4))]
     packet_type: PacketType,
     #[instructor(bits(0..2))]
-    message_type: MessageType,
+    message_type: MessageType
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Exstruct, Instruct)]
 struct SignalIdentifierField {
     #[instructor(bitfield(u8))]
     #[instructor(bits(0..6))]
-    signal_identifier: SignalIdentifier,
+    signal_identifier: SignalIdentifier
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -147,7 +147,7 @@ pub struct SignalMessage {
     pub transaction_label: u8,
     pub message_type: MessageType,
     pub signal_identifier: SignalIdentifier,
-    pub data: Bytes,
+    pub data: Bytes
 }
 
 #[derive(Default)]
@@ -157,11 +157,10 @@ pub struct SignalMessageAssembler {
     message_type: MessageType,
     signal_identifier: SignalIdentifier,
     number_of_signaling_packets: u8,
-    packet_count: u8,
+    packet_count: u8
 }
 
 impl SignalMessageAssembler {
-
     fn reset(&mut self) {
         self.transaction_label = 0;
         self.message.clear();
@@ -174,7 +173,11 @@ impl SignalMessageAssembler {
     pub fn process_msg(&mut self, mut data: Bytes) -> Result<Option<SignalMessage>, Error> {
         self.packet_count += 1;
 
-        let SignalHeader {transaction_label, packet_type, message_type} = data.read_be()?;
+        let SignalHeader {
+            transaction_label,
+            packet_type,
+            message_type
+        } = data.read_be()?;
 
         match packet_type {
             PacketType::Single | PacketType::Start if !self.message.is_empty() => {
@@ -196,7 +199,7 @@ impl SignalMessageAssembler {
                     signal_identifier,
                     data
                 }))
-            },
+            }
             PacketType::Start => {
                 self.transaction_label = transaction_label;
                 self.message_type = message_type;
@@ -204,18 +207,21 @@ impl SignalMessageAssembler {
                 self.signal_identifier = data.read_be::<SignalIdentifierField>()?.signal_identifier;
                 self.message.extend_from_slice(&data);
                 Ok(None)
-            },
+            }
             PacketType::Continue => match self.packet_count < self.number_of_signaling_packets {
                 true => {
                     self.message.extend_from_slice(&data);
                     Ok(None)
-                },
+                }
                 false => {
-                    warn!("Exceeded number of signaling packets (got: {}, expected: {})", self.packet_count, self.number_of_signaling_packets);
+                    warn!(
+                        "Exceeded number of signaling packets (got: {}, expected: {})",
+                        self.packet_count, self.number_of_signaling_packets
+                    );
                     self.reset();
                     Err(Error::InvalidValue)
                 }
-            }
+            },
             PacketType::End => match self.packet_count == self.number_of_signaling_packets {
                 true => {
                     self.message.extend_from_slice(&data);
@@ -227,17 +233,18 @@ impl SignalMessageAssembler {
                     };
                     self.reset();
                     Ok(Some(message))
-                },
+                }
                 false => {
-                    warn!("Insufficient number of signaling packets (got: {}, expected: {})", self.packet_count, self.number_of_signaling_packets);
+                    warn!(
+                        "Insufficient number of signaling packets (got: {}, expected: {})",
+                        self.packet_count, self.number_of_signaling_packets
+                    );
                     self.reset();
                     Err(Error::InvalidValue)
                 }
-
             }
         }
     }
-
 }
 
 pub trait SignalChannelExt {
@@ -245,18 +252,34 @@ pub trait SignalChannelExt {
 }
 
 impl SignalChannelExt for Channel {
-    fn send_signal(&mut self, SignalMessage { transaction_label, message_type, signal_identifier, data }: SignalMessage) -> Result<(), hci::Error> {
+    fn send_signal(
+        &mut self,
+        SignalMessage {
+            transaction_label,
+            message_type,
+            signal_identifier,
+            data
+        }: SignalMessage
+    ) -> Result<(), hci::Error> {
         let mut buffer = BytesMut::new();
         let (mut packet_type, chunk_size) = match data.len() + 2 <= self.remote_mtu as usize {
             true => (PacketType::Single, usize::MAX),
             false => (PacketType::Start, (self.remote_mtu - 2) as usize)
         };
-        let number_of_signaling_packets: u8 = data.len().div_ceil(chunk_size).try_into().expect("payload too large");
-        for (i, chunk) in data.chunks(chunk_size).chain(repeat([].as_slice())).enumerate() {
+        let number_of_signaling_packets: u8 = data
+            .len()
+            .div_ceil(chunk_size)
+            .try_into()
+            .expect("payload too large");
+        for (i, chunk) in data
+            .chunks(chunk_size)
+            .chain(repeat([].as_slice()))
+            .enumerate()
+        {
             buffer.write_be(SignalHeader {
                 transaction_label,
                 packet_type,
-                message_type,
+                message_type
             });
             if matches!(packet_type, PacketType::Start) {
                 buffer.write_be(number_of_signaling_packets);
@@ -305,16 +328,18 @@ mod tests {
     fn test_endpoint_struct() {
         let data: &[u8] = &[0x04, 0x08];
         let ep: StreamEndpoint = (&*data).read().unwrap();
-        assert_eq!(ep, StreamEndpoint {
-            seid: 0x01,
-            in_use: false,
-            media_type: MediaType::Audio,
-            tsep: StreamEndpointType::Sink
-        });
+        assert_eq!(
+            ep,
+            StreamEndpoint {
+                seid: 0x01,
+                in_use: false,
+                media_type: MediaType::Audio,
+                tsep: StreamEndpointType::Sink
+            }
+        );
 
         let mut buffer = BytesMut::new();
         buffer.write(&ep);
         assert_eq!(buffer.chunk(), data);
     }
-
 }

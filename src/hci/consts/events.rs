@@ -1,4 +1,5 @@
 use std::fmt::{Display, Formatter};
+
 use enum_iterator::Sequence;
 use instructor::{Exstruct, Instruct};
 
@@ -70,9 +71,8 @@ pub enum EventCode {
     InquiryResponseNotification = 0x56,
     AuthenticatedPayloadTimeoutExpired = 0x57,
     SamStatusChange = 0x58,
-    Vendor = 0xFF,
+    Vendor = 0xFF
 }
-
 
 /// HCI status codes ([Vol 1] Part F, Section 1.3).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Instruct, Exstruct)]
@@ -145,7 +145,7 @@ pub enum Status {
     UnknownAdvertisingIdentifier = 0x42,
     LimitReached = 0x43,
     OperationCancelledByHost = 0x44,
-    PacketTooLong = 0x45,
+    PacketTooLong = 0x45
 }
 
 impl Status {
@@ -169,7 +169,6 @@ impl std::error::Error for Status {}
 pub struct EventMask(u64);
 
 impl EventMask {
-
     /// Returns an all-zero event mask that disables all maskable events.
     #[inline(always)]
     pub const fn none() -> Self {
@@ -191,7 +190,6 @@ impl EventMask {
         }
         self
     }
-
 }
 
 impl Default for EventMask {
@@ -201,7 +199,6 @@ impl Default for EventMask {
 }
 
 impl EventCode {
-
     // ([Vol 4] Part E, Section 7.3.1)
     pub fn to_mask_bits(self) -> u64 {
         match self {
@@ -213,7 +210,7 @@ impl EventCode {
             EventCode::AuthenticationComplete => 1u64 << 5,
             EventCode::RemoteNameRequestComplete => 1u64 << 6,
             EventCode::EncryptionChange => 1u64 << 7,
-            EventCode::ChangeConnectionLinkKeyComplete =>1u64 << 8,
+            EventCode::ChangeConnectionLinkKeyComplete => 1u64 << 8,
             EventCode::LinkKeyTypeChanged => 1u64 << 9,
             EventCode::ReadRemoteSupportedFeaturesComplete => 1u64 << 10,
             EventCode::ReadRemoteVersionInformationComplete => 1u64 << 11,

@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
+
 use crate::sdp::data_element::{DataElement, Uuid};
 
 #[derive(Clone, Eq, PartialEq)]
@@ -11,7 +12,7 @@ pub struct ServiceAttribute {
 
 impl ServiceAttribute {
     pub fn new<T: Into<DataElement>>(id: u16, value: T) -> Self {
-        Self {id, value: value.into() }
+        Self { id, value: value.into() }
     }
 
     pub fn contains(&self, uuid: Uuid) -> bool {
@@ -24,7 +25,6 @@ impl ServiceAttribute {
         }
         contains(&self.value, uuid)
     }
-
 }
 
 impl IntoIterator for ServiceAttribute {
@@ -34,7 +34,6 @@ impl IntoIterator for ServiceAttribute {
     fn into_iter(self) -> Self::IntoIter {
         [self.id.into(), self.value].into_iter()
     }
-
 }
 
 impl Debug for ServiceAttribute {
@@ -52,19 +51,15 @@ pub struct Service {
 }
 
 impl Service {
-
     pub fn contains(&self, uuid: Uuid) -> bool {
         self.attributes.iter().any(|a| a.contains(uuid))
     }
 
-    pub fn attributes<'a: 'b, 'b>(&'a self, requested: &'b [RangeInclusive<u16>]) -> impl Iterator<Item=&'a ServiceAttribute> + 'b {
+    pub fn attributes<'a: 'b, 'b>(&'a self, requested: &'b [RangeInclusive<u16>]) -> impl Iterator<Item = &'a ServiceAttribute> + 'b {
         self.attributes
             .iter()
-            .filter(move |a| requested
-                .iter()
-                .any(|r| r.contains(&a.id)))
+            .filter(move |a| requested.iter().any(|r| r.contains(&a.id)))
     }
-
 }
 
 impl AsRef<[ServiceAttribute]> for Service {

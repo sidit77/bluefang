@@ -44,5 +44,5 @@ pub enum SdpErrorCodes {
     InvalidRequestSyntax = 0x0003,
     InvalidPduSize = 0x0004,
     InvalidContinuationState = 0x0005,
-    InsufficientResources = 0x0006,
+    InsufficientResources = 0x0006
 }

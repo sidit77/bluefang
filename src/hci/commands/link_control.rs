@@ -1,10 +1,10 @@
 use bytes::BufMut;
-use instructor::{BufferMut};
-use crate::hci::{Error, Hci, Opcode, OpcodeGroup};
+use instructor::BufferMut;
+
 use crate::hci::consts::{AuthenticationRequirements, IoCapability, Lap, LinkKey, OobDataPresence, RemoteAddr, Role, Status};
+use crate::hci::{Error, Hci, Opcode, OpcodeGroup};
 
 impl Hci {
-
     /// Start the inquiry process to discover other Bluetooth devices in the vicinity.
     /// ([Vol 4] Part E, Section 7.1.1).
     ///
@@ -16,7 +16,8 @@ impl Hci {
             p.write_le(lap);
             p.write_le(time);
             p.write_le(max_responses);
-        }).await?;
+        })
+        .await?;
         // TODO return channel for inquiry results
         Ok(())
     }
@@ -27,18 +28,25 @@ impl Hci {
         self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x0009), |p| {
             p.write_le(bd_addr);
             p.write_le(role);
-        }).await?;
+        })
+        .await?;
         Ok(())
     }
 
     /// Reject a connection request from a remote device.
     /// ([Vol 4] Part E, Section 7.1.9).
     pub async fn reject_connection_request(&self, bd_addr: RemoteAddr, reason: Status) -> Result<(), Error> {
-        assert!(matches!(reason, Status::ConnectionRejectedDueToLimitedResources | Status::ConnectionRejectedDueToSecurityReasons | Status::ConnectionRejectedDueToUnacceptableBdAddr));
+        assert!(matches!(
+            reason,
+            Status::ConnectionRejectedDueToLimitedResources
+                | Status::ConnectionRejectedDueToSecurityReasons
+                | Status::ConnectionRejectedDueToUnacceptableBdAddr
+        ));
         self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x000A), |p| {
             p.write_le(bd_addr);
             p.write_le(reason);
-        }).await?;
+        })
+        .await?;
         Ok(())
     }
 
@@ -47,14 +55,16 @@ impl Hci {
         self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x000B), |p| {
             p.write_le(bd_addr);
             p.write_le_ref(key);
-        }).await
+        })
+        .await
     }
 
     /// ([Vol 4] Part E, Section 7.1.11).
     pub async fn link_key_not_present(&self, bd_addr: RemoteAddr) -> Result<RemoteAddr, Error> {
         self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x000C), |p| {
             p.write_le(bd_addr);
-        }).await
+        })
+        .await
     }
 
     /// ([Vol 4] Part E, Section 7.1.12).
@@ -65,30 +75,28 @@ impl Hci {
             p.write_le(pin.len());
             p.put_slice(pin.as_bytes());
             p.put_bytes(0, 16 - pin.len());
-        }).await
+        })
+        .await
     }
 
     /// ([Vol 4] Part E, Section 7.1.29).
     pub async fn io_capability_reply(
-        &self,
-        bd_addr: RemoteAddr,
-        io: IoCapability,
-        oob: OobDataPresence,
-        auth: AuthenticationRequirements
+        &self, bd_addr: RemoteAddr, io: IoCapability, oob: OobDataPresence, auth: AuthenticationRequirements
     ) -> Result<RemoteAddr, Error> {
         self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x002B), |p| {
             p.write_le(bd_addr);
             p.write_le(io);
             p.write_le(oob);
             p.write_le(auth);
-        }).await
+        })
+        .await
     }
 
     /// ([Vol 4] Part E, Section 7.1.30).
     pub async fn user_confirmation_request_accept(&self, bd_addr: RemoteAddr) -> Result<RemoteAddr, Error> {
         self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x002C), |p| {
             p.write_le(bd_addr);
-        }).await
+        })
+        .await
     }
-
 }

@@ -1,10 +1,8 @@
 pub mod sbc;
 pub mod sdp;
 
-use instructor::{Exstruct, Instruct};
 use instructor::utils::u24;
-
-
+use instructor::{Exstruct, Instruct};
 
 // ([A2DP] Section 4.5.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Instruct, Exstruct)]
@@ -24,14 +22,15 @@ pub struct AacMediaCodecInformationRaw {
     #[instructor(bits(23..24))]
     pub vbr: bool,
     #[instructor(bits(0..23))]
-    pub bit_rate: u24,
+    pub bit_rate: u24
 }
 
 #[cfg(test)]
 mod test {
     use bytes::Bytes;
     use instructor::Buffer;
-    use crate::a2dp::{AacMediaCodecInformationRaw};
+
+    use crate::a2dp::AacMediaCodecInformationRaw;
 
     #[test]
     fn test_aac_codec_information() {
@@ -41,5 +40,4 @@ mod test {
         println!("{:#?}", codec);
         println!("{:06x}", codec.bit_rate);
     }
-
 }

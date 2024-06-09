@@ -9,7 +9,6 @@ pub enum ErrorCode {
     #[error("Bad header format")]
     BadHeaderFormat = 0x01,
 
-
     /// Caused by commands: All messages
     #[error("The request packet length is not match the assumed length")]
     BadLength = 0x11,
@@ -39,10 +38,11 @@ pub enum ErrorCode {
     NotSupportedCommand = 0x19,
 
     /// Caused by commands: Reconfigure
-    #[error("The reconfigure command is an attempt to reconfigure a transport service capabilities of the SEP. \
-              Reconfigure is only permitted for application service capabilities")]
+    #[error(
+        "The reconfigure command is an attempt to reconfigure a transport service capabilities of the SEP. \
+              Reconfigure is only permitted for application service capabilities"
+    )]
     InvalidCapabilities = 0x1A,
-
 
     /// Caused by commands: SetConfiguration
     #[error("The requested Recovery Type is not defined in AVDTP")]
@@ -74,7 +74,7 @@ pub enum ErrorCode {
 
     /// Caused by commands: All messages
     #[error("The ACP state machine is in an invalid state in order to process the signal")]
-    BadState = 0x31,
+    BadState = 0x31
 }
 
 impl From<InstructorError> for ErrorCode {
@@ -83,7 +83,7 @@ impl From<InstructorError> for ErrorCode {
             InstructorError::TooShort => ErrorCode::BadLength,
             InstructorError::TooLong => ErrorCode::BadLength,
             InstructorError::InvalidValue => ErrorCode::BadHeaderFormat,
-            InstructorError::UnexpectedLength => ErrorCode::BadLength,
+            InstructorError::UnexpectedLength => ErrorCode::BadLength
         }
     }
 }

@@ -18,7 +18,7 @@ pub struct SbcMediaCodecInformation {
     #[instructor(bits(0..2))]
     pub allocation_methods: AllocationMethods,
     pub minimum_bitpool: u8,
-    pub maximum_bitpool: u8,
+    pub maximum_bitpool: u8
 }
 
 impl Default for SbcMediaCodecInformation {
@@ -30,7 +30,7 @@ impl Default for SbcMediaCodecInformation {
             subbands: Subbands::all(),
             allocation_methods: AllocationMethods::all(),
             minimum_bitpool: 2,
-            maximum_bitpool: 53,
+            maximum_bitpool: 53
         }
     }
 }
@@ -54,7 +54,7 @@ impl SamplingFrequencies {
             SamplingFrequencies::FREQ_32000 => Some(32000),
             SamplingFrequencies::FREQ_44100 => Some(44100),
             SamplingFrequencies::FREQ_48000 => Some(48000),
-            _ => None,
+            _ => None
         }
     }
 }
@@ -90,7 +90,7 @@ impl BlockLengths {
             BlockLengths::EIGHT => Some(8),
             BlockLengths::TWELVE => Some(12),
             BlockLengths::SIXTEEN => Some(16),
-            _ => None,
+            _ => None
         }
     }
 }
@@ -110,7 +110,7 @@ impl Subbands {
         match self {
             Subbands::FOUR => Some(4),
             Subbands::EIGHT => Some(8),
-            _ => None,
+            _ => None
         }
     }
 }
@@ -132,11 +132,11 @@ impl ByteSize for SbcMediaCodecInformation {
     }
 }
 
-
 #[cfg(test)]
 mod test {
     use bytes::Bytes;
     use instructor::Buffer;
+
     use crate::a2dp::sbc::SbcMediaCodecInformation;
 
     #[test]

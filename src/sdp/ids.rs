@@ -1,4 +1,3 @@
-
 pub mod attributes {
     // ([Vol 3] Part B, Section 5.1.1).
     pub const SERVICE_RECORD_HANDLE_ID: u16 = 0x0000;
@@ -32,7 +31,6 @@ pub mod attributes {
 
     // ([Vol 3] Part B, Section 5.1.11).
     pub const BLUETOOTH_PROFILE_DESCRIPTOR_LIST_ID: u16 = 0x0009;
-
 }
 
 // ([Assigned Numbers] Section 3.1).
@@ -63,7 +61,6 @@ pub mod protocols {
     pub const MCAP_CONTROL_CHANNEL: Uuid = Uuid::from_u16(0x001e);
     pub const MCAP_DATA_CHANNEL: Uuid = Uuid::from_u16(0x001f);
     pub const L2CAP: Uuid = Uuid::from_u16(0x0100);
-
 }
 
 // ([Assigned Numbers] Section 3.2).

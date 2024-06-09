@@ -1,14 +1,15 @@
 mod packets;
 
 use std::collections::BTreeSet;
+
 use bytes::Bytes;
+pub use packets::{Message, MessageType};
 use tracing::{debug, warn};
+
 use crate::avctp::packets::{ControlChannelExt, MessageAssembler};
+use crate::hci;
 use crate::l2cap::channel::Channel;
 use crate::sdp::Uuid;
-
-pub use packets::{MessageType, Message};
-use crate::hci;
 
 pub struct Avctp {
     channel: Channel,
@@ -17,8 +18,7 @@ pub struct Avctp {
 }
 
 impl Avctp {
-
-    pub fn new<I: IntoIterator<Item=Uuid>>(channel: Channel, profiles: I) -> Self {
+    pub fn new<I: IntoIterator<Item = Uuid>>(channel: Channel, profiles: I) -> Self {
         Self {
             channel,
             assembler: MessageAssembler::default(),
@@ -31,20 +31,22 @@ impl Avctp {
             match self.assembler.process_msg(packet) {
                 Ok(Some(msg)) => {
                     if self.profile_ids.contains(&msg.profile_id) {
-                        return Some(msg)
+                        return Some(msg);
                     }
                     debug!("Received message with unexpected profile id: {:?}", msg.profile_id);
                     if msg.message_type == MessageType::Command {
-                        self.channel.send_msg(Message {
-                            transaction_label: msg.transaction_label,
-                            message_type: MessageType::ResponseInvalidProfile,
-                            profile_id: msg.profile_id,
-                            data: Bytes::new()
-                        }).unwrap_or_else(|err| {
-                            warn!("Failed to send invalid profile message: {:?}", err);
-                        })
+                        self.channel
+                            .send_msg(Message {
+                                transaction_label: msg.transaction_label,
+                                message_type: MessageType::ResponseInvalidProfile,
+                                profile_id: msg.profile_id,
+                                data: Bytes::new()
+                            })
+                            .unwrap_or_else(|err| {
+                                warn!("Failed to send invalid profile message: {:?}", err);
+                            })
                     }
-                },
+                }
                 Ok(None) => continue,
                 Err(err) => {
                     warn!("Error processing message: {:?}", err);
@@ -59,6 +61,4 @@ impl Avctp {
         //TODO Fragment messages larger than mtu
         self.channel.send_msg(message)
     }
-
 }
-

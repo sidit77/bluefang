@@ -1,12 +1,14 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
 use bytes::{Bytes, BytesMut};
 use instructor::{Buffer, BufferMut};
-use tokio::{fs, spawn};
 use tokio::sync::mpsc::unbounded_channel;
-use tokio::task::{JoinHandle, spawn_blocking};
+use tokio::task::{spawn_blocking, JoinHandle};
+use tokio::{fs, spawn};
 use tracing::{debug, trace, warn};
+
 use crate::ensure;
 use crate::hci::consts::*;
 use crate::hci::{Error, Hci};
@@ -21,7 +23,7 @@ impl Default for ConnectionManagerBuilder {
     fn default() -> Self {
         Self {
             link_key_store: PathBuf::from("link-keys.dat"),
-            simple_secure_pairing: true,
+            simple_secure_pairing: true
         }
     }
 }
@@ -48,10 +50,8 @@ impl ConnectionManagerBuilder {
                     result.insert(addr, key);
                 }
                 result
-            },
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                BTreeMap::new()
-            },
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
             Err(err) => return Err(err.into())
         };
 
@@ -63,24 +63,19 @@ impl ConnectionManagerBuilder {
                     // EventCode::ConnectionComplete,
                     // EventCode::DisconnectionComplete,
                     EventCode::PinCodeRequest,
-
                     EventCode::LinkKeyNotification,
                     EventCode::LinkKeyRequest,
-
                     EventCode::IoCapabilityRequest,
                     EventCode::IoCapabilityResponse,
-
                     EventCode::UserConfirmationRequest,
-
                     EventCode::UserPasskeyNotification,
                     EventCode::UserPasskeyRequest,
                     EventCode::KeypressNotification,
-
                     EventCode::RemoteOobDataRequest,
-
-                    EventCode::SimplePairingComplete,
+                    EventCode::SimplePairingComplete
                 ],
-                tx)?;
+                tx
+            )?;
             rx
         };
 
@@ -91,7 +86,7 @@ impl ConnectionManagerBuilder {
         let mut state = ConnectionManagerState {
             hci,
             link_key_store: self.link_key_store,
-            link_keys,
+            link_keys
         };
 
         Ok(spawn(async move {
@@ -124,8 +119,10 @@ impl ConnectionManagerState {
 
                 ensure!(link_type == LinkType::Acl, "Invalid link type");
                 debug!("Connection request: {}", addr);
-                self.hci.accept_connection_request(addr, Role::Slave).await?;
-            },
+                self.hci
+                    .accept_connection_request(addr, Role::Slave)
+                    .await?;
+            }
             EventCode::PinCodeRequest => {
                 // ([Vol 4] Part E, Section 7.7.22).
                 let addr: RemoteAddr = data.read_le()?;
@@ -133,7 +130,7 @@ impl ConnectionManagerState {
 
                 debug!("Pin code request: {}", addr);
                 self.hci.pin_code_request_reply(addr, "0000").await?;
-            },
+            }
             EventCode::LinkKeyRequest => {
                 // ([Vol 4] Part E, Section 7.7.23).
                 let addr: RemoteAddr = data.read_le()?;
@@ -158,15 +155,22 @@ impl ConnectionManagerState {
                 debug!("Link key notification: {} {:?} {:?}", addr, key, key_type);
                 self.link_keys.insert(addr, key);
                 self.save_link_keys();
-            },
+            }
             EventCode::IoCapabilityRequest => {
                 // ([Vol 4] Part E, Section 7.7.40).
                 let addr: RemoteAddr = data.read_le()?;
                 data.finish()?;
 
                 debug!("Io capability request: {}", addr);
-                self.hci.io_capability_reply(addr, IoCapability::NoInputNoOutput, OobDataPresence::NotPresent, AuthenticationRequirements::DedicatedBondingProtected).await?;
-            },
+                self.hci
+                    .io_capability_reply(
+                        addr,
+                        IoCapability::NoInputNoOutput,
+                        OobDataPresence::NotPresent,
+                        AuthenticationRequirements::DedicatedBondingProtected
+                    )
+                    .await?;
+            }
             EventCode::IoCapabilityResponse => {
                 // ([Vol 4] Part E, Section 7.7.30).
                 let addr: RemoteAddr = data.read_le()?;
@@ -176,7 +180,7 @@ impl ConnectionManagerState {
                 data.finish()?;
 
                 debug!("Io capability response: {} {:?} {} {:?}", addr, io, oob, auth);
-            },
+            }
             EventCode::UserConfirmationRequest => {
                 // ([Vol 4] Part E, Section 7.7.31).
                 let addr: RemoteAddr = data.read_le()?;
@@ -186,7 +190,7 @@ impl ConnectionManagerState {
 
                 debug!("User confirmation request: {} {}", addr, passkey);
                 self.hci.user_confirmation_request_accept(addr).await?;
-            },
+            }
             EventCode::SimplePairingComplete => {
                 // ([Vol 4] Part E, Section 7.7.45).
                 let status: Status = data.read_le()?;
@@ -194,7 +198,7 @@ impl ConnectionManagerState {
                 data.finish()?;
 
                 debug!("Simple pairing complete: {} {}", addr, status);
-            },
+            }
 
             EventCode::UserPasskeyNotification => {
                 // ([Vol 4] Part E, Section 7.7.48).
@@ -205,7 +209,7 @@ impl ConnectionManagerState {
 
                 debug!("User passkey notification: {} {}", addr, passkey);
                 panic!("Passkeys not supported");
-            },
+            }
             EventCode::UserPasskeyRequest => {
                 // ([Vol 4] Part E, Section 7.7.43).
                 let addr: RemoteAddr = data.read_le()?;
@@ -213,7 +217,7 @@ impl ConnectionManagerState {
 
                 debug!("User passkey request: {}", addr);
                 panic!("Passkeys not supported");
-            },
+            }
             EventCode::KeypressNotification => {
                 // ([Vol 4] Part E, Section 7.7.49).
                 let addr: RemoteAddr = data.read_le()?;
@@ -221,7 +225,7 @@ impl ConnectionManagerState {
                 data.finish()?;
 
                 debug!("Keypress notification: {} {:?}", addr, ty);
-            },
+            }
             EventCode::RemoteOobDataRequest => {
                 // ([Vol 4] Part E, Section 7.7.44).
                 let addr: RemoteAddr = data.read_le()?;
@@ -229,7 +233,7 @@ impl ConnectionManagerState {
 
                 debug!("Remote OOB data request: {}", addr);
                 panic!("OOB data not supported");
-            },
+            }
             _ => unreachable!()
         }
         Ok(())
@@ -243,8 +247,6 @@ impl ConnectionManagerState {
         }
         let data = data.freeze();
         let path = self.link_key_store.clone();
-        spawn_blocking(move || std::fs::write(path, &data)
-            .unwrap_or_else(|err| warn!("Failed to save link keys: {:?}", err)));
+        spawn_blocking(move || std::fs::write(path, &data).unwrap_or_else(|err| warn!("Failed to save link keys: {:?}", err)));
     }
 }
-

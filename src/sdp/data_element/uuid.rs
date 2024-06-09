@@ -1,4 +1,5 @@
 use std::fmt::{Display, Formatter};
+
 use instructor::Instruct;
 
 // ([Vol 3] Part B, Section 2.5.1).
@@ -25,8 +26,7 @@ impl Uuid {
 
     #[inline]
     fn remove_base(self) -> Option<u32> {
-        ((self.0 & ((1u128 << 96) - 1)) == Self::BASE)
-            .then_some((self.0 >> 96) as u32)
+        ((self.0 & ((1u128 << 96) - 1)) == Self::BASE).then_some((self.0 >> 96) as u32)
     }
 
     #[inline]
@@ -47,7 +47,6 @@ impl Uuid {
             _ => None
         }
     }
-
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Instruct)]
@@ -59,7 +58,6 @@ pub enum PackedUuid {
 }
 
 impl PackedUuid {
-
     #[inline]
     pub const fn size_index(self) -> u8 {
         match self {
@@ -109,4 +107,3 @@ impl Display for Uuid {
         )
     }
 }
-

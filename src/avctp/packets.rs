@@ -1,9 +1,9 @@
 use bytes::{BufMut, Bytes, BytesMut};
 use instructor::{Buffer, BufferMut, Error, Exstruct, Instruct};
 
-use crate::{ensure, hci, log_assert};
 use crate::l2cap::channel::Channel;
 use crate::sdp::Uuid;
+use crate::{ensure, hci, log_assert};
 
 // ([AVCTP] Section 6.1)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Instruct, Exstruct)]
@@ -15,7 +15,7 @@ struct PacketHeader {
     #[instructor(bits(2..4))]
     packet_type: PacketType,
     #[instructor(bits(0..2))]
-    message_type: MessageType,
+    message_type: MessageType
 }
 
 // ([AVCTP] Section 6.1)
@@ -24,9 +24,8 @@ struct PacketHeader {
 pub enum MessageType {
     Command = 0b00,
     Response = 0b10,
-    ResponseInvalidProfile = 0b11,
+    ResponseInvalidProfile = 0b11
 }
-
 
 // ([AVCTP] Section 6.1)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Instruct, Exstruct)]
@@ -35,7 +34,7 @@ enum PacketType {
     Single = 0b00,
     Start = 0b01,
     Continue = 0b10,
-    End = 0b11,
+    End = 0b11
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -53,11 +52,10 @@ pub struct MessageAssembler {
     message_type: Option<MessageType>,
     profile_id: u16,
     num_packets: u8,
-    packets_received: u8,
+    packets_received: u8
 }
 
 impl MessageAssembler {
-
     fn reset(&mut self) {
         self.data.clear();
         self.message_type = None;
@@ -70,14 +68,23 @@ impl MessageAssembler {
     fn process_msg_internal(&mut self, mut data: Bytes) -> Result<Option<Message>, Error> {
         self.packets_received += 1;
 
-        let PacketHeader { transaction_label, packet_type, message_type } = data.read()?;
+        let PacketHeader {
+            transaction_label,
+            packet_type,
+            message_type
+        } = data.read()?;
 
         match packet_type {
             PacketType::Single => {
                 log_assert!(self.message_type.is_none());
                 self.reset();
                 let profile_id: u16 = data.read_be()?;
-                Ok(Some(Message { transaction_label, message_type, profile_id: Uuid::from_u16(profile_id), data }))
+                Ok(Some(Message {
+                    transaction_label,
+                    message_type,
+                    profile_id: Uuid::from_u16(profile_id),
+                    data
+                }))
             }
             PacketType::Start => {
                 log_assert!(self.message_type.is_none());
@@ -117,11 +124,12 @@ impl MessageAssembler {
 
     pub fn process_msg(&mut self, data: Bytes) -> Result<Option<Message>, Error> {
         let result = self.process_msg_internal(data);
-        if result.is_err() { self.reset(); }
+        if result.is_err() {
+            self.reset();
+        }
         result
     }
 }
-
 
 pub trait ControlChannelExt {
     fn send_msg(&mut self, message: Message) -> Result<(), hci::Error>;
@@ -134,7 +142,7 @@ impl ControlChannelExt for Channel {
         buffer.write(PacketHeader {
             transaction_label: message.transaction_label,
             packet_type: PacketType::Single,
-            message_type: message.message_type,
+            message_type: message.message_type
         });
         buffer.write_be(message.profile_id.as_u16().expect("Invalid profile id"));
         buffer.put(message.data);
@@ -153,17 +161,18 @@ mod test {
     #[test]
     fn test_parse_packet() {
         let testdata: &[u8] = &[
-            0x00, 0x11, 0x0E, 0x03, 0x48, 0x00, 0x00, 0x19, 0x58,
-            0x31, 0x00, 0x00, 0x05, 0x0D, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x11, 0x0E, 0x03, 0x48, 0x00, 0x00, 0x19, 0x58, 0x31, 0x00, 0x00, 0x05, 0x0D, 0x00, 0x00, 0x00, 0x00
         ];
         let data = Bytes::from_static(testdata);
         let mut assember: MessageAssembler = Default::default();
-        assert_eq!(assember.process_msg(data).unwrap(), Some(Message {
-            transaction_label: 0,
-            profile_id: Uuid::from_u16(0x110E),
-            message_type: MessageType::Command,
-            data: Bytes::from_static(&testdata[3..])
-        }));
+        assert_eq!(
+            assember.process_msg(data).unwrap(),
+            Some(Message {
+                transaction_label: 0,
+                profile_id: Uuid::from_u16(0x110E),
+                message_type: MessageType::Command,
+                data: Bytes::from_static(&testdata[3..])
+            })
+        );
     }
-
 }

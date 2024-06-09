@@ -25,7 +25,7 @@ pub enum ErrorCode {
     PlayerNotAddressed = 0x13,
     NoValidSearchResults = 0x14,
     NoAvailablePlayers = 0x15,
-    AddressedPlayerChanged = 0x16,
+    AddressedPlayerChanged = 0x16
 }
 
 impl From<instructor::Error> for ErrorCode {
@@ -36,9 +36,8 @@ impl From<instructor::Error> for ErrorCode {
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum AvcError {
-    NotImplemented,
-    //Parsing(instructor::Error),
-    //Avrcp(ErrorCode),
+    NotImplemented //Parsing(instructor::Error),
+                   //Avrcp(ErrorCode),
 }
 
 impl From<instructor::Error> for AvcError {

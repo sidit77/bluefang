@@ -1,18 +1,20 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::pending;
 use std::mem::size_of;
+
 use bytes::{BufMut, Bytes, BytesMut};
-use instructor::{Buffer, Exstruct};
 use instructor::utils::Length;
+use instructor::{Buffer, Exstruct};
 use nusb::transfer::{ControlOut, ControlType, Recipient, RequestBuffer, TransferError};
-use tokio::sync::mpsc::{UnboundedSender as MpscSender, UnboundedReceiver as MpscReceiver};
+use tokio::sync::mpsc::{UnboundedReceiver as MpscReceiver, UnboundedSender as MpscSender};
 use tokio::sync::oneshot::Sender as OneshotSender;
 use tracing::{debug, error, warn};
-use crate::hci::{Error, Opcode};
+
 use crate::hci::btsnoop::{LogWriter, PacketType};
 use crate::hci::consts::{EventCode, Status};
+use crate::hci::{Error, Opcode};
 use crate::host::usb::UsbHost;
-use crate::utils::{DispatchExt};
+use crate::utils::DispatchExt;
 
 const TRANSFER_BUFFER_SIZE: usize = 4096;
 const TRANSFER_BUFFER_COUNT: usize = 4;
@@ -21,33 +23,36 @@ pub enum EventLoopCommand {
     Shutdown,
     RegisterHciEventHandler {
         events: BTreeSet<EventCode>,
-        handler: MpscSender<(EventCode, Bytes)>,
+        handler: MpscSender<(EventCode, Bytes)>
     },
     RegisterAclDataHandler {
-        handler: MpscSender<Bytes>,
+        handler: MpscSender<Bytes>
     },
-    SetMaxInFlightAclPackets(u32),
+    SetMaxInFlightAclPackets(u32)
 }
 
 pub type CmdResultSender = OneshotSender<Result<Bytes, TransferError>>;
 
 pub async fn event_loop(
-    transport: UsbHost,
-    mut cmd_receiver: MpscReceiver<(Opcode, Bytes, CmdResultSender)>,
-    mut acl_receiver: MpscReceiver<Bytes>,
-    mut ctl_receiver: MpscReceiver<EventLoopCommand>,
+    transport: UsbHost, mut cmd_receiver: MpscReceiver<(Opcode, Bytes, CmdResultSender)>, mut acl_receiver: MpscReceiver<Bytes>,
+    mut ctl_receiver: MpscReceiver<EventLoopCommand>
 ) {
-
-    let mut events = transport.interface.interrupt_in_queue(transport.endpoints.event);
+    let mut events = transport
+        .interface
+        .interrupt_in_queue(transport.endpoints.event);
     for _ in 0..TRANSFER_BUFFER_COUNT {
         events.submit(RequestBuffer::new(TRANSFER_BUFFER_SIZE));
     }
 
-    let mut acl_in = transport.interface.bulk_in_queue(transport.endpoints.acl_in);
+    let mut acl_in = transport
+        .interface
+        .bulk_in_queue(transport.endpoints.acl_in);
     for _ in 0..TRANSFER_BUFFER_COUNT {
         acl_in.submit(RequestBuffer::new(TRANSFER_BUFFER_SIZE));
     }
-    let mut acl_out = transport.interface.bulk_out_queue(transport.endpoints.acl_out);
+    let mut acl_out = transport
+        .interface
+        .bulk_out_queue(transport.endpoints.acl_out);
 
     let mut state = State::default();
     let log = LogWriter::new();
@@ -153,11 +158,10 @@ struct State {
     hci_event_handlers: BTreeMap<EventCode, Vec<MpscSender<(EventCode, Bytes)>>>,
     acl_data_handlers: Vec<MpscSender<Bytes>>,
     max_in_flight: u32,
-    in_flight: u32,
+    in_flight: u32
 }
 
 impl State {
-
     async fn outstanding_command_dropped(&mut self) {
         match self.outstanding_command.as_mut() {
             None => pending().await,
@@ -182,18 +186,17 @@ impl State {
                 let opcode: Opcode = data.read_le()?;
                 // trace!("Received CommandComplete for {:?}", opcode);
                 match self.outstanding_command.take() {
-                    Some((op, tx)) if op == opcode => {
-                        tx.send(Ok(data))
-                            .unwrap_or_else(|_| debug!("CommandComplete receiver dropped"))
-                    },
+                    Some((op, tx)) if op == opcode => tx
+                        .send(Ok(data))
+                        .unwrap_or_else(|_| debug!("CommandComplete receiver dropped")),
                     Some((op, tx)) => {
                         self.outstanding_command = Some((op, tx));
                         return Err(Error::UnexpectedCommandResponse(opcode));
-                    },
+                    }
                     None => return Err(Error::UnexpectedCommandResponse(opcode))
                 }
                 Ok(true)
-            },
+            }
             EventCode::NumberOfCompletedPackets => {
                 // ([Vol 4] Part E, Section 7.7.19).
                 let count = data.read_le::<u8>()? as usize;
@@ -207,17 +210,18 @@ impl State {
                 }
                 data.finish()?;
                 Ok(true)
-            },
+            }
             _ => {
                 let code = header.code;
-                let handled = self.hci_event_handlers
+                let handled = self
+                    .hci_event_handlers
                     .get_mut(&code)
                     .map_or(false, |handlers| handlers.dispatch((code, data)));
                 if !handled {
                     warn!("Unhandled HCI event: {:?}", code);
                 }
                 Ok(handled)
-            },
+            }
         }
     }
 
@@ -226,7 +230,6 @@ impl State {
         self.acl_data_handlers.dispatch(data);
         Ok(())
     }
-
 }
 
 /// HCI event packet ([Vol 4] Part E, Section 5.4.4).
@@ -253,7 +256,6 @@ pub struct EventHeader {
 //            })
 //    }
 //}
-
 
 /*
 InquiryEvent::Complete => {
