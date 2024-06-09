@@ -313,7 +313,7 @@ impl<H, F> ProtocolDelegate<H, F>
         H: Send + 'static,
         F: Fn(&H, Channel) + Send + 'static
 {
-    pub fn new<I: Into<u64>>(psm: I, handler: H, map_func: F) -> Box<dyn ProtocolHandler> {
+    pub fn boxed<I: Into<u64>>(psm: I, handler: H, map_func: F) -> Box<dyn ProtocolHandler> {
         Box::new(Self {
             psm: psm.into(),
             handler,

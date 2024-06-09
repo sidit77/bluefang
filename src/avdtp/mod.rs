@@ -158,6 +158,7 @@ impl AvdtpSession {
     }
 
     fn get_stream(&mut self, seid: u8) -> Result<&mut Stream, ErrorCode> {
+        #[allow(clippy::obfuscated_if_else)]
         self.streams.iter_mut()
             .find(|stream| stream.local_endpoint == seid)
             .ok_or_else(|| self.local_endpoints.iter()

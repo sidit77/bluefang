@@ -36,7 +36,7 @@ pub struct Avrcp {
 impl ProtocolHandlerProvider for Avrcp {
     fn protocol_handlers(&self) -> Vec<Box<dyn ProtocolHandler>> {
         vec![
-            ProtocolDelegate::new(AVCTP_PSM, self.clone(), Self::handle_control)
+            ProtocolDelegate::boxed(AVCTP_PSM, self.clone(), Self::handle_control)
         ]
     }
 }
@@ -150,7 +150,7 @@ impl State {
                         .iter()
                         .position(|x| x.is_free())
                         else {
-                            if let Some(sender) = cmd.to_response_sender() {
+                            if let Some(sender) = cmd.into_response_sender() {
                                 let _ = sender.send(Err(SessionError::NoTransactionIdAvailable));
                             }
                             continue;
@@ -272,11 +272,9 @@ impl State {
                     } else {
                         //TODO send continue and continue abort responses
                     }
-                } else {
-                    if let Some(Command { pdu, parameters }) = self.command_assembler.process_msg(message.data)? {
-                        if let Err(err) = self.process_command(message.transaction_label, frame.ctype, pdu, parameters) {
-                            self.send_avrcp(message.transaction_label, CommandCode::Rejected, pdu, err);
-                        }
+                } else if let Some(Command { pdu, parameters }) = self.command_assembler.process_msg(message.data)? {
+                    if let Err(err) = self.process_command(message.transaction_label, frame.ctype, pdu, parameters) {
+                        self.send_avrcp(message.transaction_label, CommandCode::Rejected, pdu, err);
                     }
                 }
 
@@ -357,9 +355,8 @@ impl State {
     }
 
     fn trigger_event(&self, event: Event) {
-        match self.events.try_send(event) {
-            Err(TrySendError::Full(event)) => warn!("Event queue full, dropping event: {:?}", event),
-            _ => {}
+        if let Err(TrySendError::Full(event)) = self.events.try_send(event) {
+            warn!("Event queue full, dropping event: {:?}", event);
         }
     }
 

@@ -21,7 +21,7 @@ pub enum AvrcpCommand {
 }
 
 impl AvrcpCommand {
-    pub fn to_response_sender(self) -> Option<CommandResponseSender> {
+    pub fn into_response_sender(self) -> Option<CommandResponseSender> {
         match self {
             AvrcpCommand::PassThrough(_, _, tx) => Some(tx),
             AvrcpCommand::VendorSpecific(_, _, _, tx) => Some(tx),

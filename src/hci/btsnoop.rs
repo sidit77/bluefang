@@ -19,6 +19,7 @@ pub struct LogWriter {
 }
 
 impl LogWriter {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         match std::env::var_os("BTSNOOP_LOG").map(PathBuf::from) {
             Some(path) => {

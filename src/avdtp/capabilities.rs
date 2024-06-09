@@ -14,10 +14,7 @@ pub enum Capability {
 impl Capability {
     pub fn is_basic(&self) -> bool {
         // ([AVDTP] Section 8.21.1).
-        match self {
-            Capability::Generic(ServiceCategory::DelayReporting, _) => false,
-            _ => true
-        }
+        !matches!(self, Capability::Generic(ServiceCategory::DelayReporting, _))
     }
 }
 
