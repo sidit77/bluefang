@@ -9,17 +9,30 @@ use crate::avc::{CommandCode, PassThroughFrame, PassThroughOp, PassThroughState}
 use crate::avrcp::notifications::CurrentTrack;
 use crate::avrcp::packets::{EventId, EVENTS_SUPPORTED_CAPABILITY, MediaAttributeId, Pdu};
 use crate::ensure;
-use crate::utils::to_bytes_be;
+use crate::utils::FromStruct;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+pub type CommandResponseSender = OneshotSender<Result<Bytes, SessionError>>;
+#[derive(Debug)]
 pub enum AvrcpCommand {
-    PassThrough(PassThroughOp, PassThroughState),
-    VendorSpecific(CommandCode, Pdu, Bytes),
-    RegisterNotification(EventId, EventParser)
+    PassThrough(PassThroughOp, PassThroughState, CommandResponseSender),
+    VendorSpecific(CommandCode, Pdu, Bytes, CommandResponseSender),
+    RegisterNotification(EventId, EventParser, CommandResponseSender),
+    UpdatedVolume(f32)
+}
+
+impl AvrcpCommand {
+    pub fn to_response_sender(self) -> Option<CommandResponseSender> {
+        match self {
+            AvrcpCommand::PassThrough(_, _, tx) => Some(tx),
+            AvrcpCommand::VendorSpecific(_, _, _, tx) => Some(tx),
+            AvrcpCommand::RegisterNotification(_, _, tx) => Some(tx),
+            _ => None
+        }
+    }
 }
 
 pub struct AvrcpSession {
-    pub(super) commands: Sender<(AvrcpCommand, OneshotSender<Result<Bytes, SessionError>>)>,
+    pub(super) commands: Sender<AvrcpCommand>,
     pub(super) events: Receiver<Event>
 }
 
@@ -29,17 +42,23 @@ impl AvrcpSession {
         self.events.recv()
     }
 
-    async fn send_cmd(&self, cmd: AvrcpCommand) -> Result<Bytes, SessionError> {
+    async fn send_vendor_cmd(&self, code: CommandCode, pdu: Pdu, parameters: Bytes) -> Result<Bytes, SessionError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.commands.send((cmd, tx)).await.map_err(|_| SessionError::SessionClosed)?;
+        self.commands.send(AvrcpCommand::VendorSpecific(code, pdu, parameters, tx)).await.map_err(|_| SessionError::SessionClosed)?;
         rx.await.map_err(|_| SessionError::SessionClosed)?
     }
 
     async fn send_action(&self, op: PassThroughOp, state: PassThroughState) -> Result<(), SessionError> {
-        let mut result = self.send_cmd(AvrcpCommand::PassThrough(op, state)).await?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.commands.send(AvrcpCommand::PassThrough(op, state, tx)).await.map_err(|_| SessionError::SessionClosed)?;
+        let mut result = rx.await.map_err(|_| SessionError::SessionClosed)??;
         let frame: PassThroughFrame = result.read_be()?;
         ensure!(frame.op == op && frame.state == state, SessionError::InvalidReturnData);
         Ok(())
+    }
+
+    pub async fn notify_local_volume_change(&self, volume: f32) -> Result<(), SessionError> {
+        self.commands.send(AvrcpCommand::UpdatedVolume(volume)).await.map_err(|_| SessionError::SessionClosed)
     }
 
     pub async fn play(&self) -> Result<(), SessionError> {
@@ -55,7 +74,7 @@ impl AvrcpSession {
     }
 
     pub async fn get_supported_events(&self) -> Result<Vec<EventId>, SessionError> {
-        let mut result = self.send_cmd(AvrcpCommand::VendorSpecific(CommandCode::Status, Pdu::GetCapabilities, to_bytes_be(EVENTS_SUPPORTED_CAPABILITY))).await?;
+        let mut result = self.send_vendor_cmd(CommandCode::Status, Pdu::GetCapabilities, Bytes::from_struct_be(EVENTS_SUPPORTED_CAPABILITY)).await?;
         ensure!(result.read_be::<u8>()? == EVENTS_SUPPORTED_CAPABILITY, SessionError::InvalidReturnData);
         let number_of_events: u8 = result.read_be()?;
         let mut events = Vec::with_capacity(number_of_events as usize);
@@ -66,7 +85,9 @@ impl AvrcpSession {
     }
 
     pub async fn register_notification<N: Notification>(&self) -> Result<N, SessionError> {
-        let mut result = self.send_cmd(AvrcpCommand::RegisterNotification(N::EVENT_ID, N::read)).await?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.commands.send(AvrcpCommand::RegisterNotification(N::EVENT_ID, N::read, tx)).await.map_err(|_| SessionError::SessionClosed)?;
+        let mut result = rx.await.map_err(|_| SessionError::SessionClosed)??;
         ensure!(result.read_be::<EventId>()? == N::EVENT_ID, SessionError::InvalidReturnData);
         let notification: N = result.read_be()?;
         result.finish()?;
@@ -89,7 +110,7 @@ impl AvrcpSession {
                 }
             }
         }
-        let mut result = self.send_cmd(AvrcpCommand::VendorSpecific(CommandCode::Status, Pdu::GetElementAttributes, buffer.freeze())).await?;
+        let mut result = self.send_vendor_cmd(CommandCode::Status, Pdu::GetElementAttributes, buffer.freeze()).await?;
         let number_of_attributes: u8 = result.read_be()?;
         let mut results = BTreeMap::new();
         for _ in 0..number_of_attributes {
@@ -137,9 +158,10 @@ pub trait Notification: Exstruct<BigEndian> + Into<Event> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Event {
     TrackChanged(CurrentTrack),
+    VolumeChanged(f32)
 }
 
 

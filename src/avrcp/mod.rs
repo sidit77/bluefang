@@ -1,23 +1,23 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use bytes::{Bytes, BytesMut};
-use instructor::{BigEndian, Buffer, BufferMut, Exstruct, Instruct};
+use instructor::{BigEndian, Buffer, BufferMut, Instruct};
 use instructor::utils::u24;
 use parking_lot::Mutex;
 use tokio::{spawn};
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::oneshot::{Sender as OneshotSender};
-use tracing::{error, info, trace, warn};
+use tokio::sync::mpsc::error::TrySendError;
+use tracing::{error, trace, warn};
 use crate::avc::{CommandCode, Frame, Opcode, PassThroughFrame, Subunit, SubunitType};
 use crate::avctp::{Avctp, Message, MessageType};
 use crate::avrcp::sdp::REMOTE_CONTROL_SERVICE;
-use crate::{ensure, hci, log_assert};
+use crate::{ensure, hci};
 use crate::avrcp::error::{AvcError, ErrorCode};
 use crate::avrcp::packets::{BLUETOOTH_SIG_COMPANY_ID, Command, CommandAssembler, COMPANY_ID_CAPABILITY, EVENTS_SUPPORTED_CAPABILITY, fragment_command, PANEL, Pdu};
 use crate::l2cap::channel::Channel;
 use crate::l2cap::{AVCTP_PSM, ProtocolDelegate, ProtocolHandler, ProtocolHandlerProvider};
 use crate::utils::{Either2, select2};
-use crate::avrcp::session::{EventParser, AvrcpCommand};
+use crate::avrcp::session::{EventParser, AvrcpCommand, CommandResponseSender};
 
 pub mod sdp;
 mod packets;
@@ -73,10 +73,11 @@ impl Avrcp {
                     avctp: Avctp::new(channel, [REMOTE_CONTROL_SERVICE]),
                     command_assembler: Default::default(),
                     response_assembler: Default::default(),
-                    volume: Volume(1.0),
+                    volume: MAX_VOLUME,
                     commands: cmd_rx,
                     events: evt_tx,
                     outstanding_transactions: Default::default(),
+                    registered_notifications: Default::default(),
                 };
                 session_handler.lock()(AvrcpSession { commands: cmd_tx, events: evt_rx });
                 state.run().await.unwrap_or_else(|err| {
@@ -93,9 +94,9 @@ impl Avrcp {
 enum TransactionState {
     #[default]
     Empty,
-    PendingPassThrough(OneshotSender<Result<Bytes, SessionError>>),
-    PendingVendorDependent(CommandCode, OneshotSender<Result<Bytes, SessionError>>),
-    PendingNotificationRegistration(EventParser, OneshotSender<Result<Bytes, SessionError>>),
+    PendingPassThrough(CommandResponseSender),
+    PendingVendorDependent(CommandCode, CommandResponseSender),
+    PendingNotificationRegistration(EventParser, CommandResponseSender),
     WaitingForChange(EventParser)
 }
 
@@ -104,7 +105,7 @@ impl TransactionState {
         matches!(self, TransactionState::Empty)
     }
 
-    pub fn take_sender(&mut self) -> OneshotSender<Result<Bytes, SessionError>> {
+    pub fn take_sender(&mut self) -> CommandResponseSender {
         let prev = std::mem::take(self);
         match prev {
             TransactionState::PendingPassThrough(sender) => sender,
@@ -124,11 +125,12 @@ struct State {
     command_assembler: CommandAssembler,
     response_assembler: CommandAssembler,
 
-    volume: Volume,
+    volume: u8,
 
-    commands: Receiver<(AvrcpCommand, OneshotSender<Result<Bytes, SessionError>>)>,
+    commands: Receiver<AvrcpCommand>,
     events: Sender<Event>,
-    outstanding_transactions: [TransactionState; 16]
+    outstanding_transactions: [TransactionState; 16],
+    registered_notifications: BTreeMap<EventId, u8>,
 }
 
 impl State {
@@ -148,17 +150,19 @@ impl State {
                         }
                     }
                 },
-                Either2::B(Some((cmd, sender))) => {
+                Either2::B(Some(cmd)) => {
                     let Some(transaction) = self
                         .outstanding_transactions
                         .iter()
                         .position(|x| x.is_free())
                         else {
-                            let _ = sender.send(Err(SessionError::NoTransactionIdAvailable));
+                            if let Some(sender) = cmd.to_response_sender() {
+                                let _ = sender.send(Err(SessionError::NoTransactionIdAvailable));
+                            }
                             continue;
                         };
                     match cmd {
-                        AvrcpCommand::PassThrough(op, state) => {
+                        AvrcpCommand::PassThrough(op, state, sender) => {
                             self.send_avc(
                                 transaction as u8,
                                 Frame {
@@ -169,7 +173,7 @@ impl State {
                                 PassThroughFrame { op, state, data_len: 0 })
                                 .then(|| self.outstanding_transactions[transaction] = TransactionState::PendingPassThrough(sender));
                         },
-                        AvrcpCommand::VendorSpecific(cmd, pdu, params) => {
+                        AvrcpCommand::VendorSpecific(cmd, pdu, params, sender) => {
                             // These should be registered using register notification
                             debug_assert!(cmd != CommandCode::Notify);
                             self.send_avrcp(
@@ -179,13 +183,19 @@ impl State {
                                 params)
                                 .then(|| self.outstanding_transactions[transaction] = TransactionState::PendingVendorDependent(cmd, sender));
                         }
-                        AvrcpCommand::RegisterNotification(event, parser) => {
+                        AvrcpCommand::RegisterNotification(event, parser, sender) => {
                             self.send_avrcp(
                                 transaction as u8,
                                 CommandCode::Notify,
                                 Pdu::RegisterNotification,
                                 (event, 0u32))
                                 .then(|| self.outstanding_transactions[transaction] = TransactionState::PendingNotificationRegistration(parser, sender));
+                        }
+                        AvrcpCommand::UpdatedVolume(volume) => {
+                            self.volume = (volume.min(MAX_VOLUME as f32).max(0.0) * MAX_VOLUME as f32).round() as u8;
+                            if let Some(transaction) = self.registered_notifications.remove(&EventId::VolumeChanged) {
+                                self.send_avrcp(transaction, CommandCode::Changed, Pdu::RegisterNotification, (EventId::VolumeChanged, self.volume));
+                            }
                         }
                     }
                 },
@@ -243,19 +253,19 @@ impl State {
                                 let _ = transaction.take_sender().send(reply);
                             },
                             TransactionState::WaitingForChange(parser) => {
-                                log_assert!(frame.ctype == CommandCode::Changed);
-                                let event = parameters
-                                    .read_be::<EventId>()
-                                    .and_then(|_| parser(&mut parameters))
-                                    .map_err(|err| {
-                                        error!("Error parsing event: {:?}", err);
-                                    });
-                                if let Ok(event) = event {
-                                    self.events.try_send(event).unwrap_or_else(|err| {
-                                        warn!("Error sending event: {:?}", err);
-                                    });
-                                }
+                                let parser = *parser;
                                 *transaction = TransactionState::Empty;
+                                if frame.ctype == CommandCode::Changed {
+                                    let event = parameters
+                                        .read_be::<EventId>()
+                                        .and_then(|_| parser(&mut parameters))
+                                        .map_err(|err| {
+                                            error!("Error parsing event: {:?}", err);
+                                        });
+                                    if let Ok(event) = event {
+                                        self.trigger_event(event);
+                                    }
+                                }
                             }
                             _ => {
                                 warn!("Received vendor dependent response with no/wrong outstanding transaction: {:?} {:?} {:?}", transaction, pdu, frame.ctype);
@@ -349,6 +359,13 @@ impl State {
         }).map_err(|err| warn!("Error sending command: {:?}", err)).is_ok()
     }
 
+    fn trigger_event(&self, event: Event) {
+        match self.events.try_send(event) {
+            Err(TrySendError::Full(event)) => warn!("Event queue full, dropping event: {:?}", event),
+            _ => {}
+        }
+    }
+
     fn process_command(&mut self, transaction: u8, _cmd: CommandCode, pdu: Pdu, mut parameters: Bytes) -> Result<(), ErrorCode> {
         match pdu {
             // ([AVRCP] Section 6.4.1)
@@ -377,17 +394,19 @@ impl State {
                 let event: EventId = parameters.read_be()?;
                 let _: u32 = parameters.read_be()?;
                 parameters.finish()?;
-                ensure!(event == EventId::VolumeChanged, ErrorCode::InvalidParameter);
+                ensure!(!self.registered_notifications.contains_key(&event), ErrorCode::InternalError, "Event id already has a notification registered");
+                ensure!(event == EventId::VolumeChanged, ErrorCode::InvalidParameter, "Attempted to register unsupported event: {:?}", event);
                 // ([AVRCP] Section 6.13.3)
                 self.send_avrcp(transaction, CommandCode::Interim, pdu, (event, self.volume));
+                self.registered_notifications.insert(event, transaction);
                 Ok(())
             },
             // ([AVRCP] Section 6.13.2)
             Pdu::SetAbsoluteVolume => {
-                self.volume = parameters.read_be()?;
+                self.volume = MAX_VOLUME.min(parameters.read_be()?);
                 parameters.finish()?;
-                info!("Volume set to: {}", self.volume.0);
                 self.send_avrcp(transaction, CommandCode::Accepted, pdu, self.volume);
+                self.trigger_event(Event::VolumeChanged(self.volume as f32 / MAX_VOLUME as f32));
                 Ok(())
             },
             _ => {
@@ -398,21 +417,4 @@ impl State {
     }
 }
 
-
-
-#[derive(Default, Debug, Copy, Clone, PartialEq)]
-pub struct Volume(pub f32);
-
-impl Exstruct<BigEndian> for Volume {
-    fn read_from_buffer<B: Buffer>(buffer: &mut B) -> Result<Self, instructor::Error> {
-        let volume: u8 = buffer.read_be()?;
-        Ok(Volume(volume as f32 / 0x7F as f32))
-    }
-}
-
-impl Instruct<BigEndian> for Volume {
-    fn write_to_buffer<B: BufferMut>(&self, buffer: &mut B) {
-        let volume = (self.0.max(0.0).min(1.0) * 0x7F as f32).round() as u8;
-        buffer.write_be(volume);
-    }
-}
+const MAX_VOLUME: u8 = 0x7f;

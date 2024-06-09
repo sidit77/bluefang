@@ -86,7 +86,7 @@ pub enum MediaAttributeId {
 }
 
 // ([AVRCP] Section 28)
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Instruct, Exstruct)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Instruct, Exstruct)]
 #[repr(u8)]
 pub enum EventId {
     PlaybackStatusChanged = 0x01,

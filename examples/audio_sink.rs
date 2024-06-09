@@ -3,11 +3,13 @@ use std::io::BufRead;
 use std::iter::zip;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool};
+use std::sync::atomic::Ordering::SeqCst;
 
 use anyhow::Context;
 use bytes::{Bytes};
 use cpal::{default_host, SampleFormat, Stream, StreamConfig};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use portable_atomic::{AtomicF32};
 use ringbuf::{HeapProd, HeapRb};
 use ringbuf::consumer::Consumer;
 use ringbuf::producer::Producer;
@@ -40,6 +42,14 @@ use bluefang::l2cap::{L2capServerBuilder};
 use bluefang::sdp::SdpBuilder;
 use bluefang::utils::{Either2, select2};
 
+macro_rules! cloned {
+    ([$($vars:ident),+] $e:expr) => {
+        {
+            $( let $vars = $vars.clone(); )+
+            $e
+        }
+    };
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -72,6 +82,7 @@ async fn main() -> anyhow::Result<()> {
             .with_link_key_store("link-keys.dat")
             .spawn(host.clone())
             .await?;
+        let volume = Arc::new(AtomicF32::new(1.0));
         let _l2cap_server = L2capServerBuilder::default()
             .with_protocol(SdpBuilder::default()
                 .with_record(A2dpSinkServiceRecord::new(0x00010001))
@@ -79,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
                 .with_record(AvrcpTargetServiceRecord::new(0x00010003))
                 .build())
             .with_protocol(AvrcpBuilder::default()
-                .build(avrcp_session_handler))
+                .build(cloned!([volume] move |session| avrcp_session_handler(volume.clone(), session))))
             .with_protocol(AvdtpBuilder::default()
                 .with_endpoint(LocalEndpoint {
                     media_type: MediaType::Audio,
@@ -91,7 +102,7 @@ async fn main() -> anyhow::Result<()> {
                         Capability::MediaCodec(SbcMediaCodecInformation::default().into())
                     ],
                     //stream_handler_factory: Box::new(|cap| Box::new(FileDumpHandler::new())),
-                    stream_handler_factory: Box::new(|cap| Box::new(SbcStreamHandler::new(cap))),
+                    stream_handler_factory: Box::new(cloned!([volume] move |cap| Box::new(SbcStreamHandler::new(volume.clone(), cap)))),
                 })
                 .build())
             .spawn(host.clone())?;
@@ -107,9 +118,11 @@ async fn main() -> anyhow::Result<()> {
 
 }
 
-fn avrcp_session_handler(mut session: AvrcpSession) {
+fn avrcp_session_handler(volume: Arc<AtomicF32>, mut session: AvrcpSession) {
     let mut commands = command_reader();
     spawn(async move {
+        session.notify_local_volume_change(volume.load(SeqCst)).await
+            .unwrap_or_else(|err| warn!("Failed to notify volume change: {}", err));
         let supported_events = session.get_supported_events().await.unwrap_or_default();
         info!("Supported Events: {:?}", supported_events);
         if supported_events.contains(&CurrentTrack::EVENT_ID) {
@@ -121,12 +134,27 @@ fn avrcp_session_handler(mut session: AvrcpSession) {
                 Some(Either2::A(command)) => match command {
                     PlayerCommand::Play => session.play().await,
                     PlayerCommand::Pause => session.pause().await,
+                    PlayerCommand::VolumeUp => {
+                        if volume.fetch_update(SeqCst, SeqCst, |v| (v < 1.0).then(|| (v + 0.1).min(1.0))).is_ok() {
+                            session.notify_local_volume_change(volume.load(SeqCst)).await
+                        } else {
+                            Ok(())
+                        }
+                    }
+                    PlayerCommand::VolumeDown => {
+                        if volume.fetch_update(SeqCst, SeqCst, |v| (v > 0.0).then(|| (v - 0.1).max(0.0))).is_ok() {
+                            session.notify_local_volume_change(volume.load(SeqCst)).await
+                        } else {
+                            Ok(())
+                        }
+                    }
                 }.unwrap_or_else(|err| warn!("Failed to send command: {:?}", err)),
                 Some(Either2::B(event)) => match event {
                     Event::TrackChanged(_) => {
                         retrieve_current_track_info(&session).await
                             .unwrap_or_else(|err| warn!("Failed to retrieve current track info: {}", err));
                     },
+                    Event::VolumeChanged(vol) => volume.store(vol, SeqCst),
                 },
                 None => break
             }
@@ -156,6 +184,7 @@ struct SbcStreamHandler {
     audio_session: AudioSession,
     resampler: FastFixedIn<f32>,
     decoder: Decoder,
+    volume: Arc<AtomicF32>,
     input_buffers: [Vec<f32>; 2],
     output_buffers: [Vec<f32>; 2],
     interleave_buffer: Vec<i16>
@@ -163,7 +192,7 @@ struct SbcStreamHandler {
 
 impl SbcStreamHandler {
 
-    pub fn new(capabilities: &[Capability]) -> Self {
+    pub fn new(volume: Arc<AtomicF32>, capabilities: &[Capability]) -> Self {
         let (source_frequency, input_size) = Self::parse_capabilities(capabilities)
             .ok_or(ErrorCode::BadMediaTransportFormat)
             .unwrap();
@@ -180,6 +209,7 @@ impl SbcStreamHandler {
 
         Self {
             decoder: Decoder::new(Vec::new()),
+            volume,
             input_buffers:from_fn(|_| vec![0f32; resampler.input_frames_max()]),
             output_buffers: from_fn(|_| vec![0f32; resampler.output_frames_max()]),
             interleave_buffer: Vec::with_capacity(2 * resampler.output_frames_max()),
@@ -221,9 +251,10 @@ impl SbcStreamHandler {
             let (_, len) = self.resampler.process_into_buffer(&mut self.input_buffers, &mut self.output_buffers, None).unwrap();
 
             self.interleave_buffer.clear();
+            let volume = self.volume.load(SeqCst).powi(4);
             for (&l, &r) in zip(&self.output_buffers[0], &self.output_buffers[1]).take(len) {
-                self.interleave_buffer.push((l * 1.0) as i16);
-                self.interleave_buffer.push((r * 1.0) as i16);
+                self.interleave_buffer.push((l * volume) as i16);
+                self.interleave_buffer.push((r * volume) as i16);
             }
             self.audio_session.writer().push_slice(&self.interleave_buffer);
         }
@@ -318,7 +349,9 @@ impl AudioSession {
 
 enum PlayerCommand {
     Play,
-    Pause
+    Pause,
+    VolumeUp,
+    VolumeDown,
 }
 
 fn command_reader() -> Receiver<PlayerCommand> {
@@ -328,10 +361,15 @@ fn command_reader() -> Receiver<PlayerCommand> {
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
         for line in std::io::BufReader::new(stdin.lock()).lines() {
-            match line.expect("Failed to read line").to_lowercase().as_str() {
-                "play" => tx.blocking_send(PlayerCommand::Play).unwrap(),
-                "pause" => tx.blocking_send(PlayerCommand::Pause).unwrap(),
+            let res = match line.expect("Failed to read line").to_lowercase().as_str() {
+                "play" => tx.blocking_send(PlayerCommand::Play),
+                "pause" => tx.blocking_send(PlayerCommand::Pause),
+                "vol+" => tx.blocking_send(PlayerCommand::VolumeUp),
+                "vol-" => tx.blocking_send(PlayerCommand::VolumeDown),
                 _ => continue,
+            };
+            if res.is_err() {
+                break;
             }
         }
         IN_USE.store(false, std::sync::atomic::Ordering::SeqCst);
