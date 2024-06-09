@@ -72,8 +72,8 @@ pub enum Pdu {
 }
 
 // ([AVRCP] Section 26)
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Instruct, Exstruct)]
-#[repr(u8)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Instruct, Exstruct)]
+#[repr(u32)]
 pub enum MediaAttributeId {
     Title = 0x01,
     ArtistName = 0x02,

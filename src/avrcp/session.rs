@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::future::Future;
 use bytes::{Bytes, BytesMut};
 use instructor::{BigEndian, Buffer, BufferMut, Exstruct};
@@ -72,8 +73,10 @@ impl AvrcpSession {
         Ok(notification)
     }
 
-    pub async fn get_current_media_attributes(&self, filter: Option<&[MediaAttributeId]>) -> Result<(), SessionError> {
-        const PLAYING: u8 = 0x00;
+    // ([AVRCP] Section 6.6.1)
+    pub async fn get_current_media_attributes(&self, filter: Option<&[MediaAttributeId]>) -> Result<BTreeMap<MediaAttributeId, String>, SessionError> {
+        const PLAYING: u64 = 0x00;
+        const UTF8: u16 = 106;
         debug_assert!(filter.map_or(true, |filter| !filter.is_empty()), "Filter should not be empty");
         let mut buffer = BytesMut::new();
         buffer.write_be(PLAYING);
@@ -86,7 +89,17 @@ impl AvrcpSession {
                 }
             }
         }
-        Ok(())
+        let mut result = self.send_cmd(AvrcpCommand::VendorSpecific(CommandCode::Status, Pdu::GetElementAttributes, buffer.freeze())).await?;
+        let number_of_attributes: u8 = result.read_be()?;
+        let mut results = BTreeMap::new();
+        for _ in 0..number_of_attributes {
+            let id: MediaAttributeId = result.read_be()?;
+            ensure!(result.read_be::<u16>()? == UTF8, SessionError::InvalidReturnData);
+            let length: u16 = result.read_be()?;
+            let value = result.split_to(length as usize);
+            results.insert(id, String::from_utf8_lossy(&value).to_string());
+        }
+        Ok(results)
     }
 
 }
@@ -99,6 +112,7 @@ pub enum SessionError {
     NoTransactionIdAvailable,
     #[error("The receiver does not implemented the command.")]
     NotImplemented,
+    //TODO and the reason to this variant
     #[error("The receiver rejected the command.")]
     Rejected,
     #[error("The receiver is currently unable to perform this action due to being in a transient state.")]
@@ -147,8 +161,8 @@ pub mod notifications {
         fn read_from_buffer<B: Buffer>(buffer: &mut B) -> Result<Self, Error> {
             let id: u64 = buffer.read_be()?;
             Ok(match id {
-                u64::MIN => Self::NotSelected,
-                u64::MAX => Self::Selected,
+                u64::MAX => Self::NotSelected,
+                u64::MIN => Self::Selected,
                 i => Self::Id(i)
             })
         }

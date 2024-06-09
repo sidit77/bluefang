@@ -13,7 +13,7 @@ use crate::avctp::{Avctp, Message, MessageType};
 use crate::avrcp::sdp::REMOTE_CONTROL_SERVICE;
 use crate::{ensure, hci, log_assert};
 use crate::avrcp::error::{AvcError, ErrorCode};
-use crate::avrcp::packets::{BLUETOOTH_SIG_COMPANY_ID, Command, CommandAssembler, COMPANY_ID_CAPABILITY, EventId, EVENTS_SUPPORTED_CAPABILITY, fragment_command, PANEL, Pdu};
+use crate::avrcp::packets::{BLUETOOTH_SIG_COMPANY_ID, Command, CommandAssembler, COMPANY_ID_CAPABILITY, EVENTS_SUPPORTED_CAPABILITY, fragment_command, PANEL, Pdu};
 use crate::l2cap::channel::Channel;
 use crate::l2cap::{AVCTP_PSM, ProtocolDelegate, ProtocolHandler, ProtocolHandlerProvider};
 use crate::utils::{Either2, select2};
@@ -25,6 +25,7 @@ mod error;
 mod session;
 
 pub use session::{AvrcpSession, SessionError, Event, Notification, notifications};
+pub use packets::{EventId, MediaAttributeId};
 
 
 

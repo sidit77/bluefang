@@ -27,7 +27,7 @@ use bluefang::avdtp::{AvdtpBuilder, LocalEndpoint, StreamHandler};
 use bluefang::avdtp::capabilities::{Capability, MediaCodecCapability};
 use bluefang::avdtp::error::ErrorCode;
 use bluefang::avdtp::packets::{MediaType, StreamEndpointType};
-use bluefang::avrcp::{AvrcpBuilder, AvrcpSession, Event, Notification};
+use bluefang::avrcp::{AvrcpBuilder, AvrcpSession, Event, MediaAttributeId, Notification};
 use bluefang::avrcp::notifications::CurrentTrack;
 use bluefang::avrcp::sdp::{AvrcpControllerServiceRecord, AvrcpTargetServiceRecord};
 
@@ -114,7 +114,7 @@ fn avrcp_session_handler(mut session: AvrcpSession) {
         info!("Supported Events: {:?}", supported_events);
         if supported_events.contains(&CurrentTrack::EVENT_ID) {
             retrieve_current_track_info(&session).await
-                .unwrap_or_else(|err| warn!("Failed to retrieve current track info: {:?}", err));
+                .unwrap_or_else(|err| warn!("Failed to retrieve current track info: {}", err));
         }
         loop {
             match select2(commands.recv(), session.next_event()).await.transpose() {
@@ -125,7 +125,7 @@ fn avrcp_session_handler(mut session: AvrcpSession) {
                 Some(Either2::B(event)) => match event {
                     Event::TrackChanged(_) => {
                         retrieve_current_track_info(&session).await
-                            .unwrap_or_else(|err| warn!("Failed to retrieve current track info: {:?}", err));
+                            .unwrap_or_else(|err| warn!("Failed to retrieve current track info: {}", err));
                     },
                 },
                 None => break
@@ -138,7 +138,15 @@ async fn retrieve_current_track_info(session: &AvrcpSession) -> anyhow::Result<(
     let current_track: CurrentTrack = session.register_notification().await?;
     match current_track {
         CurrentTrack::NotSelected => info!("No track selected"),
-        CurrentTrack::Selected => {}
+        CurrentTrack::Selected => {
+            let attributes = session
+                .get_current_media_attributes(Some(&[MediaAttributeId::Title, MediaAttributeId::ArtistName]))
+                .await?;
+            info!("Current Track: {} - {}",
+                attributes.get(&MediaAttributeId::ArtistName).map_or("", String::as_str),
+                attributes.get(&MediaAttributeId::Title).map_or("", String::as_str)
+            );
+        }
         CurrentTrack::Id(id) => info!("Track ID: {:?}", id),
     }
     Ok(())
