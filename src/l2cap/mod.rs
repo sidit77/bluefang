@@ -226,16 +226,7 @@ impl State {
             .ok_or(ConnectionResult::RefusedNoResources)?;
 
         let (tx, rx) = unbounded_channel();
-        let channel = Channel {
-            connection_handle: handle,
-            remote_cid: scid,
-            local_cid: dcid,
-            receiver: rx,
-            sender: self.sender.clone(),
-            next_signaling_id: self.next_signaling_id.clone(),
-            local_mtu: 0,
-            remote_mtu: 0
-        };
+        let channel = Channel::new(handle, scid, dcid, rx, self.sender.clone(), self.next_signaling_id.clone());
         self.channels.insert(dcid, (scid, tx));
         server.handle(channel);
 
@@ -287,7 +278,9 @@ pub enum ConfigureResult {
 pub enum ChannelEvent {
     DataReceived(Bytes),
     ConfigurationRequest(u8, Bytes),
-    ConfigurationResponse(u8, ConfigureResult, Bytes)
+    ConfigurationResponse(u8, ConfigureResult, Bytes),
+    DisconnectRequest,
+    DisconnectResponse
 }
 
 pub trait ProtocolHandlerProvider {

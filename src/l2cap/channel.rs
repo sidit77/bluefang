@@ -1,34 +1,93 @@
+use std::future::poll_fn;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use instructor::utils::Length;
-use instructor::{Buffer, BufferMut, DoubleEndedBufferMut};
+use instructor::{Buffer, BufferMut, DoubleEndedBufferMut, Exstruct, Instruct, LittleEndian};
 use tokio::sync::mpsc::UnboundedReceiver as MpscReceiver;
 use tokio::time::sleep;
-use tracing::{trace, warn};
+use tracing::{debug, info_span, instrument, Span, span, trace, warn};
 
 use crate::ensure;
-use crate::hci::{AclSender, Error};
+use crate::hci::{AclSender, Error as HciError};
 use crate::l2cap::signaling::{SignalingCodes, SignalingHeader};
 use crate::l2cap::{ChannelEvent, ConfigureResult, L2capHeader, CID_ID_SIGNALING};
 
 const DEFAULT_MTU: u16 = 1691;
 
+enum Event {
+    DataReceived(Bytes),
+    ConfigurationCompete,
+    DisconnectComplete
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, thiserror::Error)]
+pub enum Error {
+    #[error("This action is not allowed in the current channel state")]
+    BadState,
+    #[error("The channel has been disconnected")]
+    Disconnected,
+    #[error("The underlying transport has been closed. Is the event loop still running?")]
+    ChannelClosed,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum State {
+    Closed,
+    Config(ConfigState),
+    Open,
+    WaitDisconnect
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum ConfigState {
+    Config,
+    SendConfig,
+    ConfigReqRsp,
+    ConfigRsp,
+    ConfigReq,
+    //IndFinalRsp,
+    //FinalRsp,
+    //ControlInd
+}
+
+// ([Vol 3] Part A, Section 5.1
+const MINIMUM_ACL_U_MTU: u16 = 48;
+
 pub struct Channel {
     pub connection_handle: u16,
+    pub state: State,
     pub remote_cid: u16,
     pub local_cid: u16,
     pub receiver: MpscReceiver<ChannelEvent>,
     pub sender: AclSender,
     pub next_signaling_id: Arc<AtomicU8>,
     pub local_mtu: u16,
-    pub remote_mtu: u16
+    pub remote_mtu: u16,
+    span: Span,
 }
 
 impl Channel {
-    fn send_configure_signal(&self, code: SignalingCodes, id: u8, mut options: BytesMut) -> Result<(), Error> {
+
+    pub fn new(connection_handle: u16, remote_cid: u16, local_cid: u16, receiver: MpscReceiver<ChannelEvent>, sender: AclSender, next_signaling_id: Arc<AtomicU8>) -> Self {
+        Self {
+            connection_handle,
+            state: State::Config(ConfigState::Config),
+            remote_cid,
+            local_cid,
+            receiver,
+            sender,
+            next_signaling_id,
+            local_mtu: 0,
+            remote_mtu: 0,
+            span: info_span!("l2cap_channel", remote_cid = remote_cid, local_cid = local_cid)
+        }
+    }
+
+    fn send_configure_signal(&self, code: SignalingCodes, id: u8, mut options: BytesMut) -> Result<(), HciError> {
         options.write_front(SignalingHeader {
             code,
             id,
@@ -42,6 +101,7 @@ impl Channel {
         Ok(())
     }
 
+    /*
     pub async fn configure(&mut self) -> Result<(), Error> {
         sleep(Duration::from_millis(400)).await;
         let mut options = BytesMut::new();
@@ -95,6 +155,7 @@ impl Channel {
         trace!("Channel configured: local_mtu={:04X} remote_mtu={:04X}", self.local_mtu, self.remote_mtu);
         Ok(())
     }
+    */
 
     pub async fn read(&mut self) -> Option<Bytes> {
         loop {
@@ -106,7 +167,7 @@ impl Channel {
         }
     }
 
-    pub fn write(&self, data: Bytes) -> Result<(), Error> {
+    pub fn write(&self, data: Bytes) -> Result<(), HciError> {
         let mut buffer = BytesMut::new();
         buffer.write_le(L2capHeader {
             len: Length::new(data.len())?,
@@ -116,7 +177,187 @@ impl Channel {
         self.sender.send(self.connection_handle, buffer.freeze())?;
         Ok(())
     }
+
+    fn set_state(&mut self, state: State) {
+        trace!("State transition: {:?} -> {:?}", self.state, state);
+        self.state = state;
+    }
+
+    #[instrument(parent = &self.span, skip(self))]
+    pub async fn configure(&mut self) -> Result<(), Error> {
+        match self.state {
+            State::Config(ConfigState::Config) => self.set_state(State::Config(ConfigState::ConfigReqRsp)),
+            State::Config(ConfigState::SendConfig) => self.set_state(State::Config(ConfigState::ConfigRsp)),
+            State::Open => self.set_state(State::Config(ConfigState::ConfigReqRsp)),
+            _ => return Err(Error::BadState)
+        }
+        // Send ConfigReq
+        poll_fn(|cx| {
+            while let Poll::Ready(event) = self.poll_rx(cx) {
+                match event? {
+                    Event::ConfigurationCompete => return Poll::Ready(Ok(())),
+                    Event::DisconnectComplete => return Poll::Ready(Err(Error::Disconnected)),
+                    Event::DataReceived(_) => warn!("Received data while still configuring")
+                }
+            }
+            Poll::Pending
+        }).await?;
+        Ok(())
+    }
+
+    #[instrument(parent = &self.span, skip(self, cx))]
+    pub fn poll_rx(&mut self, cx: &mut Context<'_>) -> Poll<Result<Event, Error>> {
+        use ChannelEvent::*;
+        while let Poll::Ready(data) = self.receiver.poll_recv(cx) {
+            let Some(data) = data else { return Poll::Ready(Err(Error::ChannelClosed)) };
+            match self.state {
+                // ([Vol 3] Part A, Section 6.1.1)
+                State::Closed => match data {
+                    ConfigurationRequest(id, options) => { /* Send CommandReject (with reason Invalid CID) */ }
+                    DisconnectRequest => { /* Send DisconnectRsp */ }
+                    _ => { /* Ignore */ }
+                }
+                // ([Vol 3] Part A, Section 6.1.4)
+                State::Config(cs) => match data {
+                    ConfigurationRequest(_, _) => match cs {
+                        ConfigState::Config => {
+                            // Send ConfigReq (success)
+                            self.set_state(State::Config(ConfigState::SendConfig));
+                            // or of nack:
+                            // Send ConfigRsp (fail)
+                            // stay in Config
+                        }
+                        ConfigState::ConfigReqRsp => {
+                            // Send ConfigReq (success)
+                            self.set_state(State::Config(ConfigState::ConfigRsp));
+                            // or of nack:
+                            // Send ConfigRsp (fail)
+                            // stay in ConfigReqRsp
+                        }
+                        ConfigState::ConfigReq => {
+                            // Send ConfigRsp (success)
+                            self.set_state(State::Open);
+                            return Poll::Ready(Ok(Event::ConfigurationCompete));
+                            // or of nack:
+                            // Send ConfigReq (fail)
+                            // stay in ConfigReq
+                        }
+                        _ => debug!("Unexpected ConfigurationRequest in state {:?}", self.state)
+                    },
+                    ConfigurationResponse(_, _, _) => match cs{
+                        ConfigState::ConfigReqRsp => {
+                            self.set_state(State::Config(ConfigState::ConfigReq));
+                            // or on reject
+                            // Send ConfigReq (new options)
+                            // stay in ConfigReqRsp
+                        }
+                        ConfigState::ConfigRsp => {
+                            self.set_state(State::Open);
+                            return Poll::Ready(Ok(Event::ConfigurationCompete));
+                            // or on reject
+                            // Send ConfigReq (new options)
+                            // stay in ConfigRsp
+                        }
+                        ConfigState::Config | ConfigState::SendConfig | ConfigState::ConfigReq => { /* Ignore */ }
+                    },
+                    DisconnectRequest => {
+                        // Send DisconnectRsp
+                        self.set_state(State::Closed);
+                        return Poll::Ready(Ok(Event::DisconnectComplete));
+                    },
+                    DisconnectResponse => { /* Ignore */ }
+                    DataReceived(data) => { return Poll::Ready(Ok(Event::DataReceived(data))) }
+                }
+                // ([Vol 3] Part A, Section 6.1.5)
+                State::Open => match data {
+                    ConfigurationRequest(_, _) => {
+                        // Complete outgoing SDU
+                        // Send ConfigRsp (ok)
+                        self.set_state(State::Config(ConfigState::SendConfig));
+                    }
+                    //// Not acceptable
+                    //ConfigurationRequest(_, _) => {
+                    //    // Complete outgoing SDU
+                    //    // Send ConfigRsp (fail)
+                    //}
+                    DisconnectRequest => {
+                        // Send DisconnectRsp
+                        self.set_state(State::Closed);
+                        return Poll::Ready(Ok(Event::DisconnectComplete));
+                    }
+                    DataReceived(data) => { return Poll::Ready(Ok(Event::DataReceived(data))) }
+                    DisconnectResponse | ConfigurationResponse(_, _, _) => { /* Ignore */ }
+                }
+                // ([Vol 3] Part A, Section 6.1.6)
+                State::WaitDisconnect => match data {
+                    ConfigurationRequest(_, _) => {
+                        // Send CommandReject with reason Invalid CID
+                    }
+                    DisconnectRequest => {
+                        // Send DisconnectRsp
+                        self.set_state(State::Closed);
+                        return Poll::Ready(Ok(Event::DisconnectComplete));
+                    }
+                    DisconnectResponse => {
+                        self.set_state(State::Closed);
+                        return Poll::Ready(Ok(Event::DisconnectComplete));
+                    }
+                    DataReceived(_) | ConfigurationResponse(_, _, _) => { /* Ignore */ }
+                }
+            }
+        }
+        Poll::Pending
+    }
+
 }
+
+pub struct ChannelConfiguration {
+    pub mtu: u16
+}
+
+impl Default for ChannelConfiguration {
+    fn default() -> Self {
+        ChannelConfiguration {
+            mtu: MINIMUM_ACL_U_MTU
+        }
+    }
+}
+
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
+pub enum FlushTimeout {
+    NoRetransmission,
+    Timeout(u16),
+    #[default]
+    Reliable
+}
+
+impl Instruct<LittleEndian> for FlushTimeout {
+    fn write_to_buffer<B: BufferMut>(&self, buffer: &mut B) {
+        let value = match *self {
+            FlushTimeout::NoRetransmission => 0x0001,
+            FlushTimeout::Timeout(timeout) => {
+                debug_assert!(timeout >= 0x0002 && timeout <= 0xFFFE);
+                timeout
+            },
+            FlushTimeout::Reliable => 0xFFFF
+        };
+        buffer.write_le(value);
+    }
+}
+
+impl Exstruct<LittleEndian> for FlushTimeout {
+    fn read_from_buffer<B: Buffer>(buffer: &mut B) -> Result<Self, instructor::Error> {
+        match buffer.read_le::<u16>()? {
+            0x0001 => Ok(FlushTimeout::NoRetransmission),
+            0xFFFF => Ok(FlushTimeout::Reliable),
+            timeout => {
+                ensure!(timeout >= 0x0002 && timeout <= 0xFFFE, instructor::Error::InvalidValue);
+                Ok(FlushTimeout::Timeout(timeout))
+            }
+        }
+    }
+}
+
 
 /*
 let mut return_data = BytesMut::new();
