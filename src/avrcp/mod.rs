@@ -13,9 +13,7 @@ use tracing::{error, trace, warn};
 use crate::avc::{CommandCode, Frame, Opcode, PassThroughFrame, Subunit, SubunitType};
 use crate::avctp::{Avctp, Message, MessageType};
 use crate::avrcp::error::{AvcError, ErrorCode};
-use crate::avrcp::packets::{
-    fragment_command, Command, CommandAssembler, Pdu, BLUETOOTH_SIG_COMPANY_ID, COMPANY_ID_CAPABILITY, EVENTS_SUPPORTED_CAPABILITY, PANEL
-};
+use crate::avrcp::packets::{fragment_command, CommandAssembler, Pdu, BLUETOOTH_SIG_COMPANY_ID, COMPANY_ID_CAPABILITY, EVENTS_SUPPORTED_CAPABILITY, PANEL, CommandStatus};
 use crate::avrcp::sdp::REMOTE_CONTROL_SERVICE;
 use crate::avrcp::session::{AvrcpCommand, CommandResponseSender, EventParser};
 use crate::l2cap::channel::Channel;
@@ -232,73 +230,76 @@ impl State {
                     company_id
                 );
                 if frame.ctype.is_response() {
-                    if let Some(Command { pdu, mut parameters }) = self.response_assembler.process_msg(message.data)? {
-                        let transaction = &mut self.outstanding_transactions[message.transaction_label as usize];
-                        match transaction {
-                            TransactionState::PendingVendorDependent(CommandCode::Control, _) => {
-                                let reply = match frame.ctype {
-                                    CommandCode::NotImplemented => Err(SessionError::NotImplemented),
-                                    CommandCode::Accepted => Ok(parameters),
-                                    CommandCode::Rejected => Err(SessionError::Rejected),
-                                    CommandCode::Interim => return Ok(()),
-                                    _ => Err(SessionError::InvalidReturnData)
-                                };
-                                let _ = transaction.take_sender().send(reply);
-                            }
-                            TransactionState::PendingVendorDependent(CommandCode::Status, _) => {
-                                let reply = match frame.ctype {
-                                    CommandCode::NotImplemented => Err(SessionError::NotImplemented),
-                                    CommandCode::Implemented => Ok(parameters),
-                                    CommandCode::Rejected => Err(SessionError::Rejected),
-                                    CommandCode::InTransition => Err(SessionError::Busy),
-                                    _ => Err(SessionError::InvalidReturnData)
-                                };
-                                let _ = transaction.take_sender().send(reply);
-                            }
-                            TransactionState::PendingVendorDependent(code, _) => {
-                                error!("Received response for invalid command code: {:?}", code);
-                                *transaction = TransactionState::Empty;
-                            }
-                            TransactionState::PendingNotificationRegistration(_, _) => {
-                                let reply = match frame.ctype {
-                                    CommandCode::NotImplemented => Err(SessionError::NotImplemented),
-                                    CommandCode::Rejected => Err(SessionError::Rejected),
-                                    CommandCode::Interim => Ok(parameters),
-                                    CommandCode::Changed => {
-                                        warn!("Received changed response without interims response");
-                                        Err(SessionError::InvalidReturnData)
-                                    }
-                                    _ => Err(SessionError::InvalidReturnData)
-                                };
-                                let _ = transaction.take_sender().send(reply);
-                            }
-                            TransactionState::WaitingForChange(parser) => {
-                                let parser = *parser;
-                                *transaction = TransactionState::Empty;
-                                if frame.ctype == CommandCode::Changed {
-                                    let event = parameters
-                                        .read_be::<EventId>()
-                                        .and_then(|_| parser(&mut parameters))
-                                        .map_err(|err| {
-                                            error!("Error parsing event: {:?}", err);
-                                        });
-                                    if let Ok(event) = event {
-                                        self.trigger_event(event);
+                    match self.response_assembler.process_msg(message.data)? {
+                        CommandStatus::Complete(pdu, mut parameters) => {
+                            let transaction = &mut self.outstanding_transactions[message.transaction_label as usize];
+                            match transaction {
+                                TransactionState::PendingVendorDependent(CommandCode::Control, _) => {
+                                    let reply = match frame.ctype {
+                                        CommandCode::NotImplemented => Err(SessionError::NotImplemented),
+                                        CommandCode::Accepted => Ok(parameters),
+                                        CommandCode::Rejected => Err(SessionError::Rejected),
+                                        CommandCode::Interim => return Ok(()),
+                                        _ => Err(SessionError::InvalidReturnData)
+                                    };
+                                    let _ = transaction.take_sender().send(reply);
+                                }
+                                TransactionState::PendingVendorDependent(CommandCode::Status, _) => {
+                                    let reply = match frame.ctype {
+                                        CommandCode::NotImplemented => Err(SessionError::NotImplemented),
+                                        CommandCode::Implemented => Ok(parameters),
+                                        CommandCode::Rejected => Err(SessionError::Rejected),
+                                        CommandCode::InTransition => Err(SessionError::Busy),
+                                        _ => Err(SessionError::InvalidReturnData)
+                                    };
+                                    let _ = transaction.take_sender().send(reply);
+                                }
+                                TransactionState::PendingVendorDependent(code, _) => {
+                                    error!("Received response for invalid command code: {:?}", code);
+                                    *transaction = TransactionState::Empty;
+                                }
+                                TransactionState::PendingNotificationRegistration(_, _) => {
+                                    let reply = match frame.ctype {
+                                        CommandCode::NotImplemented => Err(SessionError::NotImplemented),
+                                        CommandCode::Rejected => Err(SessionError::Rejected),
+                                        CommandCode::Interim => Ok(parameters),
+                                        CommandCode::Changed => {
+                                            warn!("Received changed response without interims response");
+                                            Err(SessionError::InvalidReturnData)
+                                        }
+                                        _ => Err(SessionError::InvalidReturnData)
+                                    };
+                                    let _ = transaction.take_sender().send(reply);
+                                }
+                                TransactionState::WaitingForChange(parser) => {
+                                    let parser = *parser;
+                                    *transaction = TransactionState::Empty;
+                                    if frame.ctype == CommandCode::Changed {
+                                        let event = parameters
+                                            .read_be::<EventId>()
+                                            .and_then(|_| parser(&mut parameters))
+                                            .map_err(|err| {
+                                                error!("Error parsing event: {:?}", err);
+                                            });
+                                        if let Ok(event) = event {
+                                            self.trigger_event(event);
+                                        }
                                     }
                                 }
-                            }
-                            _ => {
-                                warn!(
+                                _ => {
+                                    warn!(
                                     "Received vendor dependent response with no/wrong outstanding transaction: {:?} {:?} {:?}",
                                     transaction, pdu, frame.ctype
                                 );
-                                return Ok(());
+                                    return Ok(());
+                                }
                             }
                         }
-                    } else {
-                        //TODO send continue and continue abort responses
+                        CommandStatus::Incomplete(pdu) => {
+                            self.send_avrcp(message.transaction_label, CommandCode::Control, Pdu::RequestContinuingResponse, pdu);
+                        }
                     }
-                } else if let Some(Command { pdu, parameters }) = self.command_assembler.process_msg(message.data)? {
+                } else if let CommandStatus::Complete(pdu, parameters ) = self.command_assembler.process_msg(message.data)? {
                     if let Err(err) = self.process_command(message.transaction_label, frame.ctype, pdu, parameters) {
                         self.send_avrcp(message.transaction_label, CommandCode::Rejected, pdu, err);
                     }
@@ -487,6 +488,11 @@ impl State {
                 self.registered_notifications.insert(event, transaction);
                 Ok(())
             }
+            // ([AVRCP] Section 6.8.1)
+            Pdu::RequestContinuingResponse | Pdu::AbortContinuingResponse => {
+                // Technically we have to delay parts of the response until these arrive but who cares
+                Ok(())
+            },
             // ([AVRCP] Section 6.13.2)
             Pdu::SetAbsoluteVolume => {
                 self.volume = MAX_VOLUME.min(parameters.read_be()?);

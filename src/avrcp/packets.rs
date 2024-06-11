@@ -108,9 +108,9 @@ pub enum EventId {
     VolumeChanged = 0x0D
 }
 
-pub struct Command {
-    pub pdu: Pdu,
-    pub parameters: Bytes
+pub enum CommandStatus {
+    Complete(Pdu, Bytes),
+    Incomplete(Pdu)
 }
 
 #[derive(Default)]
@@ -125,7 +125,7 @@ impl CommandAssembler {
         self.pdu = None;
     }
 
-    pub fn process_msg(&mut self, mut packet: Bytes) -> Result<Option<Command>, Error> {
+    pub fn process_msg(&mut self, mut packet: Bytes) -> Result<CommandStatus, Error> {
         let CommandHeader {
             pdu,
             packet_type,
@@ -137,29 +137,26 @@ impl CommandAssembler {
             PacketType::Single => {
                 log_assert!(self.pdu.is_none());
                 self.reset();
-                Ok(Some(Command { pdu, parameters: packet }))
+                Ok(CommandStatus::Complete(pdu, packet))
             }
             PacketType::Start => {
                 log_assert!(self.pdu.is_none());
                 self.reset();
                 self.pdu = Some(pdu);
                 self.data.put(packet);
-                Ok(None)
+                Ok(CommandStatus::Incomplete(pdu))
             }
             PacketType::Continue => {
                 ensure!(self.pdu == Some(pdu), Error::InvalidValue);
                 self.data.put(packet);
-                Ok(None)
+                Ok(CommandStatus::Incomplete(pdu))
             }
             PacketType::End => {
                 ensure!(self.pdu == Some(pdu), Error::InvalidValue);
                 self.data.put(packet);
-                let cmd = Command {
-                    pdu,
-                    parameters: self.data.split().freeze()
-                };
+                let data = self.data.split().freeze();
                 self.reset();
-                Ok(Some(cmd))
+                Ok(CommandStatus::Complete(pdu, data))
             }
         }
     }
@@ -208,14 +205,13 @@ mod tests {
 
     use crate::avc::CommandCode;
     use crate::avrcp::packets::{fragment_command, EventId, Pdu};
-    use crate::avrcp::Volume;
 
     #[test]
     pub fn test_fragmentation() {
         fragment_command(
             CommandCode::Interim,
             Pdu::RegisterNotification,
-            (EventId::VolumeChanged, Volume(0.0)),
+            (EventId::VolumeChanged, 0u8),
             |data| {
                 assert_eq!(&[0x0F, 0x48, 0x00, 0x00, 0x19, 0x58, 0x31, 0x00, 0x00, 0x02, 0x0D, 0x00], data.chunk());
                 Ok::<(), ()>(())
