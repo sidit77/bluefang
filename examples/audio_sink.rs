@@ -144,12 +144,18 @@ fn avrcp_session_handler(volume: Arc<AtomicF32>, mut session: AvrcpSession) {
                 .transpose()
             {
                 Some(Either2::A(command)) => match command {
-                    PlayerCommand::Play => session.play().await,
-                    PlayerCommand::Pause => session.pause().await,
+                    PlayerCommand::Play => {
+                        println!("Play");
+                        session.play().await
+                    },
+                    PlayerCommand::Pause => {
+                        println!("Pause");
+                        session.pause().await
+                    },
                     PlayerCommand::VolumeUp | PlayerCommand::VolumeDown => {
                         let d = if command == PlayerCommand::VolumeUp { 0.1 } else { -0.1 };
                         let _ = volume.fetch_update(SeqCst, SeqCst, |v| Some((v + d).max(0.0).min(1.0)));
-                        info!("Volume: {}%", (volume.load(SeqCst) * 100.0).round());
+                        println!("Volume: {}%", (volume.load(SeqCst) * 100.0).round());
                         session
                             .notify_local_volume_change(volume.load(SeqCst))
                             .await
@@ -164,7 +170,7 @@ fn avrcp_session_handler(volume: Arc<AtomicF32>, mut session: AvrcpSession) {
                     }
                     Event::VolumeChanged(vol) => {
                         volume.store(vol, SeqCst);
-                        info!("Volume: {}%", (volume.load(SeqCst) * 100.0).round());
+                        println!("Volume: {}%", (volume.load(SeqCst) * 100.0).round());
                     }
                 },
                 None => break
@@ -176,12 +182,12 @@ fn avrcp_session_handler(volume: Arc<AtomicF32>, mut session: AvrcpSession) {
 async fn retrieve_current_track_info(session: &AvrcpSession) -> anyhow::Result<()> {
     let current_track: CurrentTrack = session.register_notification().await?;
     match current_track {
-        CurrentTrack::NotSelected => info!("No track selected"),
+        CurrentTrack::NotSelected => println!("No track selected"),
         CurrentTrack::Selected => {
             let attributes = session
                 .get_current_media_attributes(Some(&[MediaAttributeId::Title, MediaAttributeId::ArtistName]))
                 .await?;
-            info!(
+            println!(
                 "Current Track: {} - {}",
                 attributes
                     .get(&MediaAttributeId::ArtistName)
@@ -191,7 +197,7 @@ async fn retrieve_current_track_info(session: &AvrcpSession) -> anyhow::Result<(
                     .map_or("", String::as_str)
             );
         }
-        CurrentTrack::Id(id) => info!("Track ID: {:?}", id)
+        CurrentTrack::Id(id) => println!("Track ID: {:?}", id)
     }
     Ok(())
 }
