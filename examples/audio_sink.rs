@@ -116,6 +116,8 @@ async fn main() -> anyhow::Result<()> {
         host.write_class_of_device(cod).await?;
         host.set_scan_enabled(true, true).await?;
 
+        println!("Waiting for connections...");
+        println!("Press Ctrl-C to exit");
         tokio::signal::ctrl_c().await?;
     }
     host.shutdown().await?;
