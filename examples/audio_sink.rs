@@ -111,7 +111,7 @@ async fn main() -> anyhow::Result<()> {
             )
             .spawn(host.clone())?;
 
-        host.write_local_name("redtest").await?;
+        host.write_local_name("bluefang").await?;
         host.write_class_of_device(cod).await?;
         host.set_scan_enabled(true, true).await?;
 

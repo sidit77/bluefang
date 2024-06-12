@@ -10,7 +10,7 @@ use tracing::{debug, info_span, instrument, Span, trace, warn};
 use crate::hci::{AclSender, AclSendError};
 use crate::l2cap::signaling::{RejectReason, SignalingCode, SignalingContext};
 use crate::l2cap::{ChannelEvent, ConfigureResult, L2capHeader, SignalingIds};
-use crate::l2cap::configuration::{ConfigurationParameter, Mtu};
+use crate::l2cap::configuration::{ConfigurationParameter, FlushTimeout, Mtu};
 use crate::utils::{IgnoreableError, ResultExt};
 
 macro_rules! event {
@@ -88,6 +88,7 @@ pub struct Channel {
     next_signaling_id: SignalingIds,
     local_mtu: Mtu,
     remote_mtu: Mtu,
+    flush_timeout: FlushTimeout,
     span: Span,
 }
 
@@ -104,7 +105,8 @@ impl Channel {
             next_signaling_id,
             local_mtu: Mtu::MINIMUM_ACL_U,
             remote_mtu: Mtu::MINIMUM_ACL_U,
-            span: info_span!("l2cap_channel", remote_cid = remote_cid, local_cid = local_cid)
+            flush_timeout: FlushTimeout::default(),
+            span: info_span!(parent: None, "l2cap_channel", remote_cid = format_args!("{:#X}", remote_cid), local_cid = format_args!("{:#X}", local_cid))
         }
     }
 
@@ -284,9 +286,12 @@ impl Channel {
     }
 
     fn handle_config_req(&mut self, id: u8, mut options: Vec<ConfigurationParameter>, success: State) -> Result<Option<Event>, Error> {
+        let updated = false;
         for option in options.iter_mut() {
             match option {
                 ConfigurationParameter::Mtu(mtu) => self.remote_mtu = *mtu,
+                //TODO How to actually handle a flush timeout?
+                ConfigurationParameter::FlushTimeout(timeout) => self.flush_timeout = *timeout,
                 _ => {
                     warn!("Unsupported configuration parameter: {:?}", option);
                     self.send_configuration_response(id, ConfigureResult::Rejected, Vec::new())?;
@@ -294,8 +299,13 @@ impl Channel {
                 }
             }
         }
-        self.send_configuration_response(id, ConfigureResult::Success, options)?;
-        Ok(self.set_state(success))
+        if updated {
+            self.send_configuration_response(id, ConfigureResult::UnacceptableParameters, options)?;
+            Ok(None)
+        } else {
+            self.send_configuration_response(id, ConfigureResult::Success, options)?;
+            Ok(self.set_state(success))
+        }
     }
 
     fn handle_config_resp(&mut self, result: ConfigureResult, options: Vec<ConfigurationParameter>, success: State) -> Result<Option<Event>, Error> {
@@ -395,59 +405,3 @@ impl Drop for Channel {
         }
     }
 }
-
-/*
-   pub async fn configure(&mut self) -> Result<(), Error> {
-       sleep(Duration::from_millis(400)).await;
-       let mut options = BytesMut::new();
-       options.write_le(self.remote_cid);
-       options.write_le(0x0000u16);
-       options.write_le(0x01u8);
-       options.write_le(0x02u8);
-       options.write_le(DEFAULT_MTU);
-       let waiting_id = self.next_signaling_id.fetch_add(1, Ordering::Relaxed);
-       self.send_configure_signal(SignalingCodes::ConfigureRequest, waiting_id, options)?;
-
-       while self.local_mtu == 0 || self.remote_mtu == 0 {
-           match self
-               .receiver
-               .recv()
-               .await
-               .ok_or(Error::Generic("Configure failed"))?
-           {
-               ChannelEvent::DataReceived(_) => trace!("Received data while still configuring"),
-               ChannelEvent::ConfigurationRequest(id, mut options) => {
-                   let mut resp = BytesMut::new();
-                   resp.write_le(self.remote_cid);
-                   resp.write_le(0x0000u16);
-                   resp.write_le(ConfigureResult::Success);
-                   if options.is_empty() {
-                       self.send_configure_signal(SignalingCodes::ConfigureResponse, id, resp)?;
-                   } else {
-                       ensure!(options.read_le::<u8>()? == 0x01, "Expected MTU");
-                       ensure!(options.read_le::<u8>()? == 0x02, "Expected length 2");
-                       self.remote_mtu = options.read_le()?;
-                       resp.write_le(0x01u8);
-                       resp.write_le(0x02u8);
-                       resp.write_le(self.remote_mtu);
-                       self.send_configure_signal(SignalingCodes::ConfigureResponse, id, resp)?;
-                   }
-               }
-               ChannelEvent::ConfigurationResponse(id, result, mut options) => {
-                   ensure!(result == ConfigureResult::Success, "Configuration failed");
-                   ensure!(id == waiting_id, "unknown configure id");
-                   if !options.is_empty() {
-                       ensure!(options.read_le::<u8>()? == 0x01, "Expected MTU");
-                       ensure!(options.read_le::<u8>()? == 0x02, "Expected length 2");
-                       self.local_mtu = options.read_le()?;
-                   } else {
-                       self.local_mtu = DEFAULT_MTU;
-                   }
-               }
-           }
-       }
-
-       trace!("Channel configured: local_mtu={:04X} remote_mtu={:04X}", self.local_mtu, self.remote_mtu);
-       Ok(())
-   }
-   */
