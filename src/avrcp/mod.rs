@@ -479,7 +479,7 @@ impl State {
                             transaction,
                             CommandCode::Implemented,
                             pdu,
-                            (EVENTS_SUPPORTED_CAPABILITY, 1, EventId::VolumeChanged)
+                            (EVENTS_SUPPORTED_CAPABILITY, 1u8, EventId::VolumeChanged)
                         )
                         .await;
                         Ok(())

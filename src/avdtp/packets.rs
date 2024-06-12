@@ -290,7 +290,7 @@ impl SignalChannelExt for Channel {
             }
             buffer.extend_from_slice(chunk);
             self.write(buffer.split().freeze()).await?;
-            match (i + 1).cmp(&(number_of_signaling_packets as usize)) {
+            match (i + 2).cmp(&(number_of_signaling_packets as usize)) {
                 Ordering::Less => packet_type = PacketType::Continue,
                 Ordering::Equal => packet_type = PacketType::End,
                 Ordering::Greater => break
