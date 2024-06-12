@@ -92,8 +92,8 @@ impl<T: Clone> DoubleEndedIterator for RepeatN<T> {
 impl<T: Clone> ExactSizeIterator for RepeatN<T> {}
 
 pub fn catch_error<F, E, R>(f: F) -> Result<R, E>
-    where
-        F: FnOnce() -> Result<R, E>
+where
+    F: FnOnce() -> Result<R, E>
 {
     f()
 }

@@ -6,8 +6,8 @@ use bytes::{Bytes, BytesMut};
 use instructor::{Buffer, BufferMut, Error, Exstruct, Instruct};
 use tracing::warn;
 
+use crate::ensure;
 use crate::l2cap::channel::{Channel, Error as L2capError};
-use crate::{ensure};
 
 // ([AVDTP] Section 8.6.2).
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Exstruct, Instruct)]

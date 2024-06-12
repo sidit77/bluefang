@@ -1,15 +1,16 @@
 use std::panic::Location;
+
 use bytes::{Bytes, BytesMut};
 use instructor::utils::Length;
 use instructor::{Buffer, BufferMut, Exstruct, Instruct, LittleEndian};
 use tokio::sync::mpsc::unbounded_channel;
-use tracing::{debug, error, instrument, Span, trace, warn};
+use tracing::{debug, error, instrument, trace, warn, Span};
 
-use crate::hci::{AclSender, AclSendError, Error};
-use crate::l2cap::{ChannelEvent, ConfigureResult, ConnectionResult, ConnectionStatus, L2capHeader, State, CID_ID_SIGNALING};
-use crate::{ensure, log_assert};
+use crate::hci::{AclSendError, AclSender, Error};
 use crate::l2cap::configuration::ConfigurationParameter;
+use crate::l2cap::{ChannelEvent, ConfigureResult, ConnectionResult, ConnectionStatus, L2capHeader, State, CID_ID_SIGNALING};
 use crate::utils::{catch_error, ResultExt};
+use crate::{ensure, log_assert};
 
 #[derive(Debug, Copy, Clone)]
 pub struct SignalingContext {
@@ -18,7 +19,6 @@ pub struct SignalingContext {
 }
 
 impl AclSender {
-
     pub fn send_signaling<P: Instruct<LittleEndian>>(&self, ctx: SignalingContext, code: SignalingCode, parameters: P) -> Result<(), AclSendError> {
         let mut data = BytesMut::new();
         data.write(parameters);
@@ -36,7 +36,6 @@ impl AclSender {
         trace!(?code, id = ctx.id, "Sending signaling command");
         self.send(ctx.handle, data.freeze())
     }
-
 }
 
 impl State {
@@ -88,7 +87,9 @@ impl State {
                 }
             });
             if let Err(reason) = result {
-                self.sender.send_signaling(ctx, SignalingCode::CommandReject, reason).ignore()
+                self.sender
+                    .send_signaling(ctx, SignalingCode::CommandReject, reason)
+                    .ignore()
             }
         }
         Ok(())
@@ -102,12 +103,18 @@ impl State {
         let (tx, rx) = unbounded_channel();
         let resp = self.handle_channel_connection(ctx.handle, psm, scid, rx);
 
-        self.sender.send_signaling(ctx, SignalingCode::ConnectionResponse, (
-            resp.ok().unwrap_or_default(),
-            scid,
-            resp.err().unwrap_or(ConnectionResult::Success),
-            ConnectionStatus::NoFurtherInformation,
-        )).unwrap_or_else(|err| warn!("Failed to send connection response: {:?}", err));
+        self.sender
+            .send_signaling(
+                ctx,
+                SignalingCode::ConnectionResponse,
+                (
+                    resp.ok().unwrap_or_default(),
+                    scid,
+                    resp.err().unwrap_or(ConnectionResult::Success),
+                    ConnectionStatus::NoFurtherInformation
+                )
+            )
+            .unwrap_or_else(|err| warn!("Failed to send connection response: {:?}", err));
         let _ = tx.send(ChannelEvent::OpenChannelResponseSent(resp.is_ok()));
         if let Ok(dcid) = resp {
             self.channels.insert(dcid, (scid, tx));
@@ -154,7 +161,7 @@ impl State {
             Some((_, channel)) => {
                 let _ = channel.send(ChannelEvent::DisconnectRequest(ctx.id));
                 Ok(())
-            },
+            }
             None => Err(RejectReason::InvalidCid { scid, dcid })
         }
     }
@@ -169,7 +176,7 @@ impl State {
             Some((_, channel)) => {
                 let _ = channel.send(ChannelEvent::DisconnectResponse(ctx.id));
                 Ok(())
-            },
+            }
             None => {
                 warn!("Channel not found DCID: {:04X}", dcid);
                 Ok(())
@@ -179,7 +186,9 @@ impl State {
 
     // ([Vol 3] Part A, Section 4.8).
     fn handle_echo_request(&mut self, ctx: SignalingContext, data: Bytes) -> Result<(), RejectReason> {
-        self.sender.send_signaling(ctx, SignalingCode::EchoResponse, data).ignore();
+        self.sender
+            .send_signaling(ctx, SignalingCode::EchoResponse, data)
+            .ignore();
         Ok(())
     }
 
@@ -193,7 +202,9 @@ impl State {
             0x0001 => {
                 debug!("Connectionless MTU");
                 let mtu = 1024u16; //TODO: fill in the real value
-                self.sender.send_signaling(ctx, SignalingCode::InformationResponse, (info_type, SUCCESS, mtu)).ignore();
+                self.sender
+                    .send_signaling(ctx, SignalingCode::InformationResponse, (info_type, SUCCESS, mtu))
+                    .ignore();
             }
             0x0002 => {
                 debug!("Local supported features");
@@ -204,7 +215,9 @@ impl State {
                 features |= 1 << 7; // Fixed Channels supported over BR/EDR
                 //features |= 1 << 9; // Unicast Connectionless Data Reception
 
-                self.sender.send_signaling(ctx, SignalingCode::InformationResponse, (info_type, SUCCESS, features)).ignore();
+                self.sender
+                    .send_signaling(ctx, SignalingCode::InformationResponse, (info_type, SUCCESS, features))
+                    .ignore();
             }
             0x0003 => {
                 debug!("        Fixed channels supported");
@@ -214,11 +227,15 @@ impl State {
                 //channels |= 1 << 2; // Connectionless reception
                 //channels |= 1 << 7; // BR/EDR Security Manager
 
-                self.sender.send_signaling(ctx, SignalingCode::InformationResponse, (info_type, SUCCESS, channels)).ignore();
+                self.sender
+                    .send_signaling(ctx, SignalingCode::InformationResponse, (info_type, SUCCESS, channels))
+                    .ignore();
             }
             _ => {
                 error!("Unknown information request: type={:04X}", info_type);
-                self.sender.send_signaling(ctx, SignalingCode::InformationResponse, (info_type, NOT_SUPPORTED)).ignore();
+                self.sender
+                    .send_signaling(ctx, SignalingCode::InformationResponse, (info_type, NOT_SUPPORTED))
+                    .ignore();
             }
         }
         Ok(())

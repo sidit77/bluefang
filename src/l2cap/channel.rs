@@ -1,17 +1,17 @@
-use std::future::{Future, poll_fn};
+use std::future::{poll_fn, Future};
 use std::task::{Context, Poll};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use instructor::utils::Length;
 use instructor::{BufferMut, Instruct, LittleEndian};
 use tokio::sync::mpsc::UnboundedReceiver as MpscReceiver;
-use tracing::{debug, info_span, instrument, Span, trace, warn};
+use tracing::{debug, info_span, instrument, trace, warn, Span};
 
-use crate::hci::{AclSender, AclSendError};
+use crate::hci::{AclSendError, AclSender};
+use crate::l2cap::configuration::{ConfigurationParameter, FlushTimeout, Mtu};
 use crate::l2cap::signaling::{RejectReason, SignalingCode, SignalingContext};
 use crate::l2cap::{ChannelEvent, ConfigureResult, L2capHeader, SignalingIds};
-use crate::l2cap::configuration::{ConfigurationParameter, FlushTimeout, Mtu};
-use crate::utils::{IgnoreableError, now_or_never, ResultExt};
+use crate::utils::{now_or_never, IgnoreableError, ResultExt};
 
 macro_rules! event {
     ($evt: expr) => {
@@ -39,7 +39,7 @@ pub enum Error {
     #[error("The channel has been disconnected")]
     Disconnected,
     #[error("The underlying transport has been closed. Is the event loop still running?")]
-    ChannelClosed,
+    ChannelClosed
 }
 
 impl From<AclSendError> for Error {
@@ -72,7 +72,7 @@ enum ConfigState {
     SendConfig,
     ConfigReqRsp,
     ConfigRsp,
-    ConfigReq,
+    ConfigReq
     //IndFinalRsp,
     //FinalRsp,
     //ControlInd
@@ -89,12 +89,14 @@ pub struct Channel {
     local_mtu: Mtu,
     remote_mtu: Mtu,
     flush_timeout: FlushTimeout,
-    span: Span,
+    span: Span
 }
 
 impl Channel {
-
-    pub fn new(connection_handle: u16, remote_cid: u16, local_cid: u16, receiver: MpscReceiver<ChannelEvent>, sender: AclSender, next_signaling_id: SignalingIds) -> Self {
+    pub fn new(
+        connection_handle: u16, remote_cid: u16, local_cid: u16, receiver: MpscReceiver<ChannelEvent>, sender: AclSender,
+        next_signaling_id: SignalingIds
+    ) -> Self {
         Self {
             connection_handle,
             state: State::WaitConnect,
@@ -152,7 +154,8 @@ impl Channel {
 
     #[instrument(parent = &self.span, skip(self))]
     pub async fn disconnect(&mut self) -> Result<(), Error> {
-        self.send_signaling(None, SignalingCode::DisconnectionRequest, (self.remote_cid, self.local_cid)).ignore();
+        self.send_signaling(None, SignalingCode::DisconnectionRequest, (self.remote_cid, self.local_cid))
+            .ignore();
         self.set_state(State::WaitDisconnect);
         self.wait_for_disconnect().await
     }
@@ -164,16 +167,14 @@ impl Channel {
                 self.wait_for_connection().await?;
                 assert_eq!(self.state, State::Config(ConfigState::Config));
                 self.set_state(State::Config(ConfigState::ConfigReqRsp))
-            },
+            }
             State::Config(ConfigState::Config) => self.set_state(State::Config(ConfigState::ConfigReqRsp)),
             State::Config(ConfigState::SendConfig) => self.set_state(State::Config(ConfigState::ConfigRsp)),
             State::Open => self.set_state(State::Config(ConfigState::ConfigReqRsp)),
             _ => return Err(Error::BadState)
         };
         // Send ConfigReq
-        self.send_configuration_request(vec![
-            DEFAULT_MTU.into()
-        ])?;
+        self.send_configuration_request(vec![DEFAULT_MTU.into()])?;
         self.local_mtu = DEFAULT_MTU;
 
         //self.wait_for_configuration_complete().await?;
@@ -184,7 +185,9 @@ impl Channel {
     fn poll_events(&mut self, cx: &mut Context<'_>) -> Poll<Result<Event, Error>> {
         use ChannelEvent::*;
         while let Poll::Ready(data) = self.receiver.poll_recv(cx) {
-            let Some(data) = data else { return Poll::Ready(Err(Error::ChannelClosed)) };
+            let Some(data) = data else {
+                return Poll::Ready(Err(Error::ChannelClosed));
+            };
             match self.state {
                 // ([Vol 3] Part A, Section 6.1.1)
                 State::Closed => match data {
@@ -197,17 +200,17 @@ impl Channel {
                         self.send_disconnect_response(id)?;
                     }
                     _ => { /* Ignore */ }
-                }
+                },
                 // ([Vol 3] Part A, Section 6.1.3)
                 State::WaitConnect => match data {
                     OpenChannelResponseSent(true) => {
                         event!(self.set_state(State::Config(ConfigState::Config)));
-                    },
+                    }
                     OpenChannelResponseSent(false) => {
                         event!(self.set_state(State::Closed));
-                    },
+                    }
                     _ => { /* Ignore */ }
-                }
+                },
                 // ([Vol 3] Part A, Section 6.1.4)
                 State::Config(cs) => match data {
                     ConfigurationRequest(id, options) => match cs {
@@ -222,7 +225,7 @@ impl Channel {
                         }
                         _ => debug!("Unexpected ConfigurationRequest in state {:?}", self.state)
                     },
-                    ConfigurationResponse(_, rsp, options) => match cs{
+                    ConfigurationResponse(_, rsp, options) => match cs {
                         ConfigState::ConfigReqRsp => {
                             event!(self.handle_config_resp(rsp, options, State::Config(ConfigState::ConfigReq))?);
                         }
@@ -235,23 +238,23 @@ impl Channel {
                         // Send DisconnectRsp
                         self.send_disconnect_response(id).ignore();
                         event!(self.set_state(State::Closed));
-                    },
+                    }
                     DisconnectResponse(_) | OpenChannelResponseSent(_) => { /* Ignore */ }
-                    DataReceived(data) => { return Poll::Ready(Ok(Event::DataReceived(data))) }
-                }
+                    DataReceived(data) => return Poll::Ready(Ok(Event::DataReceived(data)))
+                },
                 // ([Vol 3] Part A, Section 6.1.5)
                 State::Open => match data {
                     ConfigurationRequest(id, options) => {
                         event!(self.handle_config_req(id, options, State::Config(ConfigState::SendConfig))?);
-                    },
+                    }
                     DisconnectRequest(id) => {
                         // Send DisconnectRsp
                         self.send_disconnect_response(id).ignore();
                         event!(self.set_state(State::Closed));
                     }
-                    DataReceived(data) => { return Poll::Ready(Ok(Event::DataReceived(data))) }
+                    DataReceived(data) => return Poll::Ready(Ok(Event::DataReceived(data))),
                     OpenChannelResponseSent(_) | DisconnectResponse(_) | ConfigurationResponse(_, _, _) => { /* Ignore */ }
-                }
+                },
                 // ([Vol 3] Part A, Section 6.1.6)
                 State::WaitDisconnect => match data {
                     ConfigurationRequest(id, _) => {
@@ -267,7 +270,7 @@ impl Channel {
                         event!(self.set_state(State::Closed));
                     }
                     OpenChannelResponseSent(_) | DataReceived(_) | ConfigurationResponse(_, _, _) => { /* Ignore */ }
-                },
+                }
             }
         }
         Poll::Pending
@@ -278,8 +281,8 @@ impl Channel {
             match event {
                 Ok(Event::DataReceived(data)) => return Poll::Ready(Some(data)),
                 Ok(Event::DisconnectComplete) | Err(Error::Disconnected | Error::ChannelClosed) => return Poll::Ready(None),
-                Ok(Event::ConnectionComplete | Event::ConfigurationCompete) => {},
-                Err(e) => panic!("{}", e),
+                Ok(Event::ConnectionComplete | Event::ConfigurationCompete) => {}
+                Err(e) => panic!("{}", e)
             }
         }
         Poll::Pending
@@ -328,7 +331,9 @@ impl Channel {
 
     fn wait_for_connection(&mut self) -> impl Future<Output = Result<(), Error>> + '_ {
         poll_fn(|cx| {
-            if let State::Closed = self.state { return Poll::Ready(Err(Error::Disconnected)) }
+            if let State::Closed = self.state {
+                return Poll::Ready(Err(Error::Disconnected));
+            }
             while let Poll::Ready(event) = self.poll_events(cx) {
                 match event? {
                     Event::ConnectionComplete => return Poll::Ready(Ok(())),
@@ -342,7 +347,9 @@ impl Channel {
 
     fn wait_for_configuration_complete(&mut self) -> impl Future<Output = Result<(), Error>> + '_ {
         poll_fn(|cx| {
-            if let State::Closed = self.state { return Poll::Ready(Err(Error::Disconnected)) }
+            if let State::Closed = self.state {
+                return Poll::Ready(Err(Error::Disconnected));
+            }
             while let Poll::Ready(event) = self.poll_events(cx) {
                 match event? {
                     Event::ConfigurationCompete => return Poll::Ready(Ok(())),
@@ -357,9 +364,13 @@ impl Channel {
 
     fn wait_for_disconnect(&mut self) -> impl Future<Output = Result<(), Error>> + '_ {
         poll_fn(|cx| {
-            if let State::Closed = self.state { return Poll::Ready(Ok(())) }
+            if let State::Closed = self.state {
+                return Poll::Ready(Ok(()));
+            }
             while let Poll::Ready(event) = self.poll_events(cx) {
-                if let Event::DisconnectComplete = event? { return Poll::Ready(Ok(())) }
+                if let Event::DisconnectComplete = event? {
+                    return Poll::Ready(Ok(()));
+                }
             }
             Poll::Pending
         })
@@ -384,7 +395,11 @@ impl Channel {
         self.send_signaling(
             Some(id),
             SignalingCode::CommandReject,
-            RejectReason::InvalidCid { scid: self.local_cid, dcid: self.remote_cid })
+            RejectReason::InvalidCid {
+                scid: self.local_cid,
+                dcid: self.remote_cid
+            }
+        )
     }
 
     fn send_configuration_request(&self, options: Vec<ConfigurationParameter>) -> Result<(), AclSendError> {
@@ -394,7 +409,6 @@ impl Channel {
     fn send_configuration_response(&self, id: u8, result: ConfigureResult, options: Vec<ConfigurationParameter>) -> Result<(), AclSendError> {
         self.send_signaling(Some(id), SignalingCode::ConfigureResponse, (self.remote_cid, u16::MIN, result, options))
     }
-
 }
 
 impl Drop for Channel {

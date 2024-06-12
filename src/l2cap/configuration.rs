@@ -1,7 +1,7 @@
 use instructor::{Buffer, BufferMut, Error, Exstruct, Instruct, LittleEndian};
-use tracing::{debug};
-use crate::ensure;
+use tracing::debug;
 
+use crate::ensure;
 
 trait ConfigurationOption: Default + Instruct<LittleEndian> + Exstruct<LittleEndian> + Into<ConfigurationParameter> {
     const TYPE: u8;
@@ -49,7 +49,7 @@ impl Instruct<LittleEndian> for FlushTimeout {
             FlushTimeout::Timeout(timeout) => {
                 debug_assert!((0x0002..=0xFFFE).contains(&timeout));
                 timeout
-            },
+            }
             FlushTimeout::Reliable => 0xFFFF
         };
         buffer.write_le(value);
@@ -69,14 +69,13 @@ impl Exstruct<LittleEndian> for FlushTimeout {
     }
 }
 
-
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Instruct, Exstruct)]
 #[repr(u8)]
 pub enum ServiceType {
     NoTraffic = 0x00,
     #[default]
     BestEffort = 0x01,
-    Guaranteed = 0x02,
+    Guaranteed = 0x02
 }
 
 // ([Vol 3] Part A, Section 5.3)
@@ -101,7 +100,7 @@ impl Default for QualityOfService {
             token_bucket_size: u32::MIN,
             peak_bandwidth: u32::MIN,
             latency: u32::MAX,
-            delay_variation: u32::MAX,
+            delay_variation: u32::MAX
         }
     }
 }
@@ -146,7 +145,7 @@ impl ConfigurationOption for RetransmissionAndFlowControl {
 pub enum Fcs {
     NoFcs = 0x00,
     #[default]
-    Fcs16 = 0x01,
+    Fcs16 = 0x01
 }
 
 impl ConfigurationOption for Fcs {
@@ -240,32 +239,32 @@ impl Instruct<LittleEndian> for ConfigurationParameter {
                 buffer.write_le_ref(&Mtu::TYPE);
                 buffer.write_le_ref(&Mtu::LENGTH);
                 buffer.write_le_ref(value);
-            },
+            }
             ConfigurationParameter::FlushTimeout(value) => {
                 buffer.write_le_ref(&FlushTimeout::TYPE);
                 buffer.write_le_ref(&FlushTimeout::LENGTH);
                 buffer.write_le_ref(value);
-            },
+            }
             ConfigurationParameter::QualityOfService(value) => {
                 buffer.write_le_ref(&QualityOfService::TYPE);
                 buffer.write_le_ref(&QualityOfService::LENGTH);
                 buffer.write_le_ref(value);
-            },
+            }
             ConfigurationParameter::RetransmissionAndFlowControl(value) => {
                 buffer.write_le_ref(&RetransmissionAndFlowControl::TYPE);
                 buffer.write_le_ref(&RetransmissionAndFlowControl::LENGTH);
                 buffer.write_le_ref(value);
-            },
+            }
             ConfigurationParameter::Fcs(value) => {
                 buffer.write_le_ref(&Fcs::TYPE);
                 buffer.write_le_ref(&Fcs::LENGTH);
                 buffer.write_le_ref(value);
-            },
+            }
             ConfigurationParameter::ExtendedFlowSpecification(value) => {
                 buffer.write_le_ref(&ExtendedFlowSpecification::TYPE);
                 buffer.write_le_ref(&ExtendedFlowSpecification::LENGTH);
                 buffer.write_le_ref(value);
-            },
+            }
             ConfigurationParameter::ExtendedWindowSize(value) => {
                 buffer.write_le_ref(&ExtendedWindowSize::TYPE);
                 buffer.write_le_ref(&ExtendedWindowSize::LENGTH);
@@ -284,36 +283,36 @@ impl Exstruct<LittleEndian> for ConfigurationParameter {
             Mtu::TYPE => {
                 ensure!(len == Mtu::LENGTH, Error::InvalidValue);
                 Ok(ConfigurationParameter::Mtu(buffer.read_le()?))
-            },
+            }
             FlushTimeout::TYPE => {
                 ensure!(len == FlushTimeout::LENGTH, Error::InvalidValue);
                 Ok(ConfigurationParameter::FlushTimeout(buffer.read_le()?))
-            },
+            }
             QualityOfService::TYPE => {
                 ensure!(len == QualityOfService::LENGTH, Error::InvalidValue);
                 Ok(ConfigurationParameter::QualityOfService(buffer.read_le()?))
-            },
+            }
             RetransmissionAndFlowControl::TYPE => {
                 ensure!(len == RetransmissionAndFlowControl::LENGTH, Error::InvalidValue);
                 Ok(ConfigurationParameter::RetransmissionAndFlowControl(buffer.read_le()?))
-            },
+            }
             Fcs::TYPE => {
                 ensure!(len == Fcs::LENGTH, Error::InvalidValue);
                 Ok(ConfigurationParameter::Fcs(buffer.read_le()?))
-            },
+            }
             ExtendedFlowSpecification::TYPE => {
                 ensure!(len == ExtendedFlowSpecification::LENGTH, Error::InvalidValue);
                 Ok(ConfigurationParameter::ExtendedFlowSpecification(buffer.read_le()?))
-            },
+            }
             ExtendedWindowSize::TYPE => {
                 ensure!(len == ExtendedWindowSize::LENGTH, Error::InvalidValue);
                 Ok(ConfigurationParameter::ExtendedWindowSize(buffer.read_le()?))
-            },
+            }
             0x80..=0xFF => {
                 debug!("Unsupported option: {:02X}", ty);
                 buffer.skip(len as usize)?;
                 Ok(ConfigurationParameter::Unknown(ty))
-            },
+            }
             _ => Err(Error::InvalidValue)
         }
     }
@@ -365,7 +364,10 @@ impl From<ExtendedWindowSize> for ConfigurationParameter {
 mod tests {
     use bytes::BytesMut;
     use instructor::BufferMut;
-    use crate::l2cap::configuration::{ConfigurationOption, ExtendedFlowSpecification, ExtendedWindowSize, Fcs, FlushTimeout, Mtu, QualityOfService, RetransmissionAndFlowControl};
+
+    use crate::l2cap::configuration::{
+        ConfigurationOption, ExtendedFlowSpecification, ExtendedWindowSize, Fcs, FlushTimeout, Mtu, QualityOfService, RetransmissionAndFlowControl
+    };
 
     #[test]
     fn check_sizes() {

@@ -16,11 +16,11 @@ pub use service::ServiceAttribute;
 use tokio::spawn;
 use tracing::{error, trace, warn};
 
+use crate::ensure;
 use crate::l2cap::channel::{Channel, Error as L2capError};
 use crate::l2cap::{ProtocolHandler, SDP_PSM};
 use crate::sdp::error::{Error, SdpErrorCodes};
 use crate::sdp::service::Service;
-use crate::ensure;
 use crate::utils::catch_error;
 
 pub trait ServiceRecord {

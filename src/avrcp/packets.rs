@@ -202,9 +202,9 @@ where
 
  */
 
-pub fn fragment_command<P>(cmd: CommandCode, pdu: Pdu, parameters: P) -> impl Iterator<Item=Bytes>
-    where
-        P: Instruct<BigEndian>,
+pub fn fragment_command<P>(cmd: CommandCode, pdu: Pdu, parameters: P) -> impl Iterator<Item = Bytes>
+where
+    P: Instruct<BigEndian>
 {
     const MAX_PAYLOAD_SIZE: usize = 512 - 3 - 3 - 3;
     let mut buffer = BytesMut::new();
@@ -237,7 +237,6 @@ pub fn fragment_command<P>(cmd: CommandCode, pdu: Pdu, parameters: P) -> impl It
     })
 }
 
-
 #[cfg(test)]
 mod tests {
     use bytes::Buf;
@@ -248,7 +247,10 @@ mod tests {
     #[test]
     pub fn test_fragmentation() {
         let mut packets = fragment_command(CommandCode::Interim, Pdu::RegisterNotification, (EventId::VolumeChanged, 0u8));
-        assert_eq!(&[0x0F, 0x48, 0x00, 0x00, 0x19, 0x58, 0x31, 0x00, 0x00, 0x02, 0x0D, 0x00], packets.next().unwrap().chunk());
+        assert_eq!(
+            &[0x0F, 0x48, 0x00, 0x00, 0x19, 0x58, 0x31, 0x00, 0x00, 0x02, 0x0D, 0x00],
+            packets.next().unwrap().chunk()
+        );
         assert_eq!(None, packets.next());
     }
 }

@@ -11,7 +11,7 @@ use crate::log_assert;
 #[derive(Debug)]
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 pub struct SelectAll<F> {
-    inner: Vec<F>,
+    inner: Vec<F>
 }
 
 impl<F: Unpin> Unpin for SelectAll<F> {}
@@ -30,17 +30,19 @@ impl<F: Future + Unpin> Future for SelectAll<F> {
 }
 
 impl<F: Future + Unpin> FromIterator<F> for SelectAll<F> {
-    fn from_iter<T: IntoIterator<Item=F>>(iter: T) -> Self {
+    fn from_iter<T: IntoIterator<Item = F>>(iter: T) -> Self {
         select_all(iter)
     }
 }
 
 pub fn select_all<I>(iter: I) -> SelectAll<I::Item>
-    where
-        I: IntoIterator,
-        I::Item: Future + Unpin,
+where
+    I: IntoIterator,
+    I::Item: Future + Unpin
 {
-    SelectAll { inner: iter.into_iter().collect() }
+    SelectAll {
+        inner: iter.into_iter().collect()
+    }
 }
 
 //pub struct SelectAll<'a, T> {
@@ -166,7 +168,6 @@ where
     Select2 { future1, future2 }
 }
 
-
 struct NoopWaker;
 impl Wake for NoopWaker {
     fn wake(self: Arc<Self>) {}
@@ -180,6 +181,6 @@ pub fn now_or_never<F: Future>(fut: F) -> Option<F::Output> {
     pin!(fut);
     match fut.poll(&mut cx) {
         Poll::Ready(x) => Some(x),
-        _ => None,
+        _ => None
     }
 }

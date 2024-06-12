@@ -1,6 +1,6 @@
 pub mod channel;
-pub mod signaling;
 pub mod configuration;
+pub mod signaling;
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -10,7 +10,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use instructor::utils::Length;
 use instructor::{Buffer, Exstruct, Instruct};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender as MpscSender, UnboundedReceiver as MpscReceiver};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver as MpscReceiver, UnboundedSender as MpscSender};
 use tokio::task::JoinHandle;
 use tokio::{select, spawn};
 use tracing::{debug, trace, warn};
@@ -289,7 +289,10 @@ impl SignalingIds {
         let mut current = self.0.load(Ordering::Relaxed);
         loop {
             let next = current.checked_add(1).unwrap_or(1);
-            match self.0.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            match self
+                .0
+                .compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
+            {
                 Ok(_) => break,
                 Err(i) => current = i
             }
@@ -297,7 +300,6 @@ impl SignalingIds {
         current
     }
 }
-
 
 pub enum ChannelEvent {
     OpenChannelResponseSent(bool),

@@ -13,7 +13,9 @@ use tracing::{error, trace, warn};
 use crate::avc::{CommandCode, Frame, Opcode, PassThroughFrame, Subunit, SubunitType};
 use crate::avctp::{Avctp, Message, MessageType};
 use crate::avrcp::error::{AvcError, ErrorCode};
-use crate::avrcp::packets::{fragment_command, CommandAssembler, Pdu, BLUETOOTH_SIG_COMPANY_ID, COMPANY_ID_CAPABILITY, EVENTS_SUPPORTED_CAPABILITY, PANEL, CommandStatus};
+use crate::avrcp::packets::{
+    fragment_command, CommandAssembler, CommandStatus, Pdu, BLUETOOTH_SIG_COMPANY_ID, COMPANY_ID_CAPABILITY, EVENTS_SUPPORTED_CAPABILITY, PANEL
+};
 use crate::avrcp::sdp::REMOTE_CONTROL_SERVICE;
 use crate::avrcp::session::{AvrcpCommand, CommandResponseSender, EventParser};
 use crate::l2cap::channel::Channel;
@@ -146,7 +148,8 @@ impl State {
                                         ..frame
                                     },
                                     payload
-                                ).await;
+                                )
+                                .await;
                             } else {
                                 warn!("Failed to handle response: {:?}", frame);
                             }
@@ -205,7 +208,8 @@ impl State {
                                         CommandCode::Changed,
                                         Pdu::RegisterNotification,
                                         (EventId::VolumeChanged, self.volume)
-                                    ).await;
+                                    )
+                                    .await;
                                 }
                             }
                         }
@@ -292,20 +296,25 @@ impl State {
                                 }
                                 _ => {
                                     warn!(
-                                    "Received vendor dependent response with no/wrong outstanding transaction: {:?} {:?} {:?}",
-                                    transaction, pdu, frame.ctype
-                                );
+                                        "Received vendor dependent response with no/wrong outstanding transaction: {:?} {:?} {:?}",
+                                        transaction, pdu, frame.ctype
+                                    );
                                     return Ok(());
                                 }
                             }
                         }
                         CommandStatus::Incomplete(pdu) => {
-                            self.send_avrcp(message.transaction_label, CommandCode::Control, Pdu::RequestContinuingResponse, pdu).await;
+                            self.send_avrcp(message.transaction_label, CommandCode::Control, Pdu::RequestContinuingResponse, pdu)
+                                .await;
                         }
                     }
-                } else if let CommandStatus::Complete(pdu, parameters ) = self.command_assembler.process_msg(message.data)? {
-                    if let Err(err) = self.process_command(message.transaction_label, frame.ctype, pdu, parameters).await {
-                        self.send_avrcp(message.transaction_label, CommandCode::Rejected, pdu, err).await;
+                } else if let CommandStatus::Complete(pdu, parameters) = self.command_assembler.process_msg(message.data)? {
+                    if let Err(err) = self
+                        .process_command(message.transaction_label, frame.ctype, pdu, parameters)
+                        .await
+                    {
+                        self.send_avrcp(message.transaction_label, CommandCode::Rejected, pdu, err)
+                            .await;
                     }
                 }
 
@@ -336,7 +345,8 @@ impl State {
                         opcode: Opcode::UnitInfo
                     },
                     (7u8, PANEL, BLUETOOTH_SIG_COMPANY_ID)
-                ).await;
+                )
+                .await;
                 Ok(())
             }
             Opcode::SubunitInfo => {
@@ -365,7 +375,8 @@ impl State {
                         opcode: Opcode::SubunitInfo
                     },
                     (page, PANEL, [0xffu8; 3])
-                ).await;
+                )
+                .await;
                 Ok(())
             }
             Opcode::PassThrough => {
@@ -400,15 +411,18 @@ impl State {
 
     async fn send_avrcp<I: Instruct<BigEndian>>(&mut self, transaction_label: u8, cmd: CommandCode, pdu: Pdu, parameters: I) -> bool {
         for packet in fragment_command(cmd, pdu, parameters) {
-            let err = self.avctp.send_msg(Message {
-                transaction_label,
-                profile_id: REMOTE_CONTROL_SERVICE,
-                message_type: match cmd.is_response() {
-                    true => MessageType::Response,
-                    false => MessageType::Command
-                },
-                data: packet
-            }).await;
+            let err = self
+                .avctp
+                .send_msg(Message {
+                    transaction_label,
+                    profile_id: REMOTE_CONTROL_SERVICE,
+                    message_type: match cmd.is_response() {
+                        true => MessageType::Response,
+                        false => MessageType::Command
+                    },
+                    data: packet
+                })
+                .await;
             if let Err(err) = err {
                 warn!("Error sending command: {:?}", err);
                 return false;
@@ -455,7 +469,8 @@ impl State {
                             CommandCode::Implemented,
                             pdu,
                             (COMPANY_ID_CAPABILITY, 1, BLUETOOTH_SIG_COMPANY_ID)
-                        ).await;
+                        )
+                        .await;
                         Ok(())
                     }
                     EVENTS_SUPPORTED_CAPABILITY => {
@@ -465,7 +480,8 @@ impl State {
                             CommandCode::Implemented,
                             pdu,
                             (EVENTS_SUPPORTED_CAPABILITY, 1, EventId::VolumeChanged)
-                        ).await;
+                        )
+                        .await;
                         Ok(())
                     }
                     _ => {
@@ -492,7 +508,8 @@ impl State {
                     event
                 );
                 // ([AVRCP] Section 6.13.3)
-                self.send_avrcp(transaction, CommandCode::Interim, pdu, (event, self.volume)).await;
+                self.send_avrcp(transaction, CommandCode::Interim, pdu, (event, self.volume))
+                    .await;
                 self.registered_notifications.insert(event, transaction);
                 Ok(())
             }
@@ -500,12 +517,13 @@ impl State {
             Pdu::RequestContinuingResponse | Pdu::AbortContinuingResponse => {
                 // Technically we have to delay parts of the response until these arrive but who cares
                 Ok(())
-            },
+            }
             // ([AVRCP] Section 6.13.2)
             Pdu::SetAbsoluteVolume => {
                 self.volume = MAX_VOLUME.min(parameters.read_be()?);
                 parameters.finish()?;
-                self.send_avrcp(transaction, CommandCode::Accepted, pdu, self.volume).await;
+                self.send_avrcp(transaction, CommandCode::Accepted, pdu, self.volume)
+                    .await;
                 self.trigger_event(Event::VolumeChanged(self.volume as f32 / MAX_VOLUME as f32));
                 Ok(())
             }
