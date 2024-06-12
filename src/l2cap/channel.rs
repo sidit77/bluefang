@@ -21,7 +21,7 @@ macro_rules! event {
     };
 }
 
-const DEFAULT_MTU: u16 = 1691;
+const DEFAULT_MTU: Mtu = Mtu(1691);
 
 enum Event {
     DataReceived(Bytes),
@@ -86,8 +86,8 @@ pub struct Channel {
     receiver: MpscReceiver<ChannelEvent>,
     sender: AclSender,
     next_signaling_id: SignalingIds,
-    pub local_mtu: u16,
-    pub remote_mtu: u16,
+    local_mtu: Mtu,
+    remote_mtu: Mtu,
     span: Span,
 }
 
@@ -102,14 +102,18 @@ impl Channel {
             receiver,
             sender,
             next_signaling_id,
-            local_mtu: 0,
-            remote_mtu: 0,
+            local_mtu: Mtu::MINIMUM_ACL_U,
+            remote_mtu: Mtu::MINIMUM_ACL_U,
             span: info_span!("l2cap_channel", remote_cid = remote_cid, local_cid = local_cid)
         }
     }
 
     pub fn connection_handle(&self) -> u16 {
         self.connection_handle
+    }
+
+    pub fn remote_mtu(&self) -> u16 {
+        self.remote_mtu.0
     }
 
     pub fn read(&mut self) -> impl Future<Output = Option<Bytes>> + '_ {
@@ -166,8 +170,9 @@ impl Channel {
         };
         // Send ConfigReq
         self.send_configuration_request(vec![
-            Mtu(DEFAULT_MTU).into()
+            DEFAULT_MTU.into()
         ])?;
+        self.local_mtu = DEFAULT_MTU;
 
         //self.wait_for_configuration_complete().await?;
         Ok(())
@@ -281,7 +286,7 @@ impl Channel {
     fn handle_config_req(&mut self, id: u8, mut options: Vec<ConfigurationParameter>, success: State) -> Result<Option<Event>, Error> {
         for option in options.iter_mut() {
             match option {
-                ConfigurationParameter::Mtu(Mtu(mtu)) => self.remote_mtu = *mtu,
+                ConfigurationParameter::Mtu(mtu) => self.remote_mtu = *mtu,
                 _ => {
                     warn!("Unsupported configuration parameter: {:?}", option);
                     self.send_configuration_response(id, ConfigureResult::Rejected, Vec::new())?;
@@ -298,7 +303,7 @@ impl Channel {
             ConfigureResult::Success => {
                 for option in options {
                     match option {
-                        ConfigurationParameter::Mtu(Mtu(mtu)) => self.local_mtu = mtu,
+                        ConfigurationParameter::Mtu(mtu) => self.local_mtu = mtu,
                         _ => unreachable!()
                     }
                 }

@@ -263,9 +263,9 @@ impl SignalChannelExt for Channel {
         }: SignalMessage
     ) -> Result<(), L2capError> {
         let mut buffer = BytesMut::new();
-        let (mut packet_type, chunk_size) = match data.len() + 2 <= self.remote_mtu as usize {
+        let (mut packet_type, chunk_size) = match data.len() + 2 <= self.remote_mtu() as usize {
             true => (PacketType::Single, usize::MAX),
-            false => (PacketType::Start, (self.remote_mtu - 2) as usize)
+            false => (PacketType::Start, (self.remote_mtu() - 2) as usize)
         };
         let number_of_signaling_packets: u8 = data
             .len()

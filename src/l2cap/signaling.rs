@@ -21,16 +21,18 @@ impl AclSender {
 
     pub fn send_signaling<P: Instruct<LittleEndian>>(&self, ctx: SignalingContext, code: SignalingCode, parameters: P) -> Result<(), AclSendError> {
         let mut data = BytesMut::new();
+        data.write(parameters);
+        let parameters = data.split().freeze();
         data.write(L2capHeader {
-            len: Length::new(data.len() + 4)?,
+            len: Length::new(parameters.len() + 4)?,
             cid: CID_ID_SIGNALING
         });
         data.write(SignalingHeader {
             code,
             id: ctx.id,
-            length: u16::try_from(data.len()).expect("Length overflow")
+            length: u16::try_from(parameters.len()).expect("Length overflow")
         });
-        data.write(parameters);
+        data.write_le(parameters);
         trace!(?code, id = ctx.id, "Sending signaling command");
         self.send(ctx.handle, data.freeze())
     }

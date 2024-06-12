@@ -14,7 +14,7 @@ trait ConfigurationOption: Default + Instruct<LittleEndian> + Exstruct<LittleEnd
 pub struct Mtu(pub u16);
 
 impl Mtu {
-    const MINIMUM_ACL_U: Self = Self(48);
+    pub const MINIMUM_ACL_U: Self = Self(48);
 }
 
 impl Default for Mtu {
