@@ -328,6 +328,7 @@ impl Channel {
 
     fn wait_for_connection(&mut self) -> impl Future<Output = Result<(), Error>> + '_ {
         poll_fn(|cx| {
+            if let State::Closed = self.state { return Poll::Ready(Err(Error::Disconnected)) }
             while let Poll::Ready(event) = self.poll_events(cx) {
                 match event? {
                     Event::ConnectionComplete => return Poll::Ready(Ok(())),
@@ -341,6 +342,7 @@ impl Channel {
 
     fn wait_for_configuration_complete(&mut self) -> impl Future<Output = Result<(), Error>> + '_ {
         poll_fn(|cx| {
+            if let State::Closed = self.state { return Poll::Ready(Err(Error::Disconnected)) }
             while let Poll::Ready(event) = self.poll_events(cx) {
                 match event? {
                     Event::ConfigurationCompete => return Poll::Ready(Ok(())),
@@ -355,6 +357,7 @@ impl Channel {
 
     fn wait_for_disconnect(&mut self) -> impl Future<Output = Result<(), Error>> + '_ {
         poll_fn(|cx| {
+            if let State::Closed = self.state { return Poll::Ready(Ok(())) }
             while let Poll::Ready(event) = self.poll_events(cx) {
                 if let Event::DisconnectComplete = event? { return Poll::Ready(Ok(())) }
             }

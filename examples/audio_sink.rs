@@ -4,6 +4,7 @@ use std::iter::zip;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::SeqCst;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
 use bluefang::a2dp::sbc::SbcMediaCodecInformation;
@@ -37,6 +38,7 @@ use rubato::{FastFixedIn, PolynomialDegree, Resampler};
 use sbc_rs::Decoder;
 use tokio::spawn;
 use tokio::sync::mpsc::Receiver;
+use tokio::time::sleep;
 use tracing::{error, info, trace, warn};
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -122,12 +124,12 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn avrcp_session_handler(volume: Arc<AtomicF32>, mut session: AvrcpSession) {
-    let mut commands = command_reader();
     spawn(async move {
         session
             .notify_local_volume_change(volume.load(SeqCst))
             .await
             .unwrap_or_else(|err| warn!("Failed to notify volume change: {}", err));
+        sleep(Duration::from_millis(200)).await;
         let supported_events = session.get_supported_events().await.unwrap_or_default();
         info!("Supported Events: {:?}", supported_events);
         if supported_events.contains(&CurrentTrack::EVENT_ID) {
@@ -135,6 +137,7 @@ fn avrcp_session_handler(volume: Arc<AtomicF32>, mut session: AvrcpSession) {
                 .await
                 .unwrap_or_else(|err| warn!("Failed to retrieve current track info: {}", err));
         }
+        let mut commands = command_reader();
         loop {
             match select2(commands.recv(), session.next_event())
                 .await
