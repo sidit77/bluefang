@@ -64,7 +64,7 @@ impl State {
             let SignalingHeader { code, id, length } = data.read()?;
             Span::current()
                 .record("code", format_args!("{:?}", code))
-                .record("id", &id);
+                .record("id", id);
             let mut data = data.split_to(length as usize);
 
             let ctx = SignalingContext { handle, id };

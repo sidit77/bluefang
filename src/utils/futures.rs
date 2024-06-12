@@ -1,8 +1,10 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::sync::Arc;
+use std::task::{Context, Poll, Wake, Waker};
 
 use pin_project_lite::pin_project;
+use tokio::pin;
 
 use crate::log_assert;
 
@@ -162,4 +164,22 @@ where
     F2: Future
 {
     Select2 { future1, future2 }
+}
+
+
+struct NoopWaker;
+impl Wake for NoopWaker {
+    fn wake(self: Arc<Self>) {}
+
+    fn wake_by_ref(self: &Arc<Self>) {}
+}
+
+pub fn now_or_never<F: Future>(fut: F) -> Option<F::Output> {
+    let noop_waker = Waker::from(Arc::new(NoopWaker));
+    let mut cx = Context::from_waker(&noop_waker);
+    pin!(fut);
+    match fut.poll(&mut cx) {
+        Poll::Ready(x) => Some(x),
+        _ => None,
+    }
 }

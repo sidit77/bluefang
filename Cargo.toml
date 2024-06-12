@@ -16,13 +16,13 @@ bitflags = "2.5.0"
 pin-project-lite = "0.2.14"
 bytes = "1"
 enum-iterator = "2.1.0"
-instructor = { path = "../instructor/instructor", features = ["derive"] }
+instructor = { git = "https://github.com/sidit77/instructor.git", features = ["derive"] }
 
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 cpal = "0.15.3"
-sbc-rs = { path = "../sbc-rs" }
+sbc-rs = { git = "https://github.com/sidit77/sbc-rs.git" }
 rubato = "0.15.0"
 ringbuf = "0.4.1"
 anyhow = "1.0.82"

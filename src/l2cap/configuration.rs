@@ -47,7 +47,7 @@ impl Instruct<LittleEndian> for FlushTimeout {
         let value = match *self {
             FlushTimeout::NoRetransmission => 0x0001,
             FlushTimeout::Timeout(timeout) => {
-                debug_assert!(timeout >= 0x0002 && timeout <= 0xFFFE);
+                debug_assert!((0x0002..=0xFFFE).contains(&timeout));
                 timeout
             },
             FlushTimeout::Reliable => 0xFFFF
@@ -62,7 +62,7 @@ impl Exstruct<LittleEndian> for FlushTimeout {
             0x0001 => Ok(FlushTimeout::NoRetransmission),
             0xFFFF => Ok(FlushTimeout::Reliable),
             timeout => {
-                ensure!(timeout >= 0x0002 && timeout <= 0xFFFE, instructor::Error::InvalidValue);
+                ensure!((0x0002..=0xFFFE).contains(&timeout), instructor::Error::InvalidValue);
                 Ok(FlushTimeout::Timeout(timeout))
             }
         }
@@ -197,7 +197,7 @@ impl Instruct<LittleEndian> for ExtendedWindowSize {
         match *self {
             ExtendedWindowSize::StreamingMode => buffer.write_le(0x0000u16),
             ExtendedWindowSize::EnhancedRetransmissionMode(size) => {
-                debug_assert!(size >= 0x0001 && size <= 0x3FFF);
+                debug_assert!((0x0001..=0x3FFF).contains(&size));
                 buffer.write_le(size)
             }
         }
@@ -209,7 +209,7 @@ impl Exstruct<LittleEndian> for ExtendedWindowSize {
         match buffer.read_le::<u16>()? {
             0x0000 => Ok(ExtendedWindowSize::StreamingMode),
             size => {
-                ensure!(size >= 0x0001 && size <= 0x3FFF, Error::InvalidValue);
+                ensure!((0x0001..=0x3FFF).contains(&size), Error::InvalidValue);
                 Ok(ExtendedWindowSize::EnhancedRetransmissionMode(size))
             }
         }

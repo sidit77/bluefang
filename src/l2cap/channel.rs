@@ -11,7 +11,7 @@ use crate::hci::{AclSender, AclSendError};
 use crate::l2cap::signaling::{RejectReason, SignalingCode, SignalingContext};
 use crate::l2cap::{ChannelEvent, ConfigureResult, L2capHeader, SignalingIds};
 use crate::l2cap::configuration::{ConfigurationParameter, FlushTimeout, Mtu};
-use crate::utils::{IgnoreableError, ResultExt};
+use crate::utils::{IgnoreableError, now_or_never, ResultExt};
 
 macro_rules! event {
     ($evt: expr) => {
@@ -151,10 +151,10 @@ impl Channel {
     }
 
     #[instrument(parent = &self.span, skip(self))]
-    pub async fn disconnect(&mut self) -> impl Future<Output = Result<(), Error>> + '_ {
+    pub async fn disconnect(&mut self) -> Result<(), Error> {
         self.send_signaling(None, SignalingCode::DisconnectionRequest, (self.remote_cid, self.local_cid)).ignore();
         self.set_state(State::WaitDisconnect);
-        self.wait_for_disconnect()
+        self.wait_for_disconnect().await
     }
 
     #[instrument(parent = &self.span, skip(self))]
@@ -356,10 +356,7 @@ impl Channel {
     fn wait_for_disconnect(&mut self) -> impl Future<Output = Result<(), Error>> + '_ {
         poll_fn(|cx| {
             while let Poll::Ready(event) = self.poll_events(cx) {
-                match event? {
-                    Event::DisconnectComplete => return Poll::Ready(Ok(())),
-                    _ => {}
-                }
+                if let Event::DisconnectComplete = event? { return Poll::Ready(Ok(())) }
             }
             Poll::Pending
         })
@@ -400,8 +397,8 @@ impl Channel {
 impl Drop for Channel {
     fn drop(&mut self) {
         if self.state != State::Closed {
-            // We drop the future instead of waiting for the disconnect to actually happen
-            let _ = self.disconnect();
+            // The first yield point should be after sending the disconnect message
+            now_or_never(self.disconnect());
         }
     }
 }
