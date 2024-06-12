@@ -3,15 +3,19 @@ name = "bluefang"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[profile.release]
+lto = true
+codegen-units=1
+# strip="symbols"
+
 
 [dependencies]
 tracing = "0.1.40"
-nusb = "0.1.8"
-thiserror = "1.0.59"
-tokio = { version = "1.37.0", features = ["full"] }
+nusb = "0.1.9"
+thiserror = "1.0.61"
+tokio = { version = "1.38.0", features = ["rt", "sync", "fs", "parking_lot", "macros", "time"] }
 num_enum = "0.7.2"
-parking_lot = "0.12.1"
+parking_lot = "0.12.3"
 bitflags = "2.5.0"
 pin-project-lite = "0.2.14"
 bytes = "1"
@@ -20,10 +24,11 @@ instructor = { git = "https://github.com/sidit77/instructor.git", features = ["d
 
 
 [dev-dependencies]
+tokio = { version = "1.38.0", features = ["rt-multi-thread", "signal"]}
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 cpal = "0.15.3"
 sbc-rs = { git = "https://github.com/sidit77/sbc-rs.git" }
-rubato = "0.15.0"
+rubato = { version = "0.15.0", default-features = false }
 ringbuf = "0.4.1"
 anyhow = "1.0.82"
 portable-atomic = { version = "1", features = ["float"] }

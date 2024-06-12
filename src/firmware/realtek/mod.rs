@@ -2,7 +2,7 @@ mod commands;
 mod info;
 
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 use tracing::{debug, error};
@@ -14,18 +14,23 @@ use crate::hci::consts::CoreVersion;
 use crate::hci::consts::CoreVersion::*;
 use crate::hci::{Error, FirmwareLoader, Hci, LocalVersion};
 
-pub fn find_binary_path(file_name: &str) -> Option<PathBuf> {
-    //TODO automatically download the firmware
-    let dir: PathBuf = std::env::var_os("RTK_FIRMWARE_DIR")?.into();
 
-    let file = dir.join(file_name);
-    file.exists().then_some(file)
+#[derive(Debug, Clone)]
+pub struct RealTekFirmwareLoader {
+    path: PathBuf
 }
 
-#[derive(Default, Debug, Copy, Clone)]
-pub struct RealTekFirmwareLoader;
-
 impl RealTekFirmwareLoader {
+
+    pub fn new<P: AsRef<Path>>(path: P) -> Self {
+        Self { path: path.as_ref().to_path_buf() }
+    }
+
+    fn find_binary_path(&self, file_name: &str) -> Option<PathBuf> {
+        let file = self.path.join(file_name);
+        file.exists().then_some(file)
+    }
+
     async fn find_chip_info(&self, hci: &Hci) -> Result<(u16, u16, CoreVersion, u8), Error> {
         let lmp_subversion = hci.read_reg16(RTL_CHIP_SUBVER).await?;
         if lmp_subversion == RTL_ROM_LMP_8822B {
@@ -74,14 +79,14 @@ impl RealTekFirmwareLoader {
 
         debug!("found driver info: {:?}", info);
 
-        let firmware_path = find_binary_path(info.firmware_name).ok_or(Error::from("Failed to find firmware file"))?;
+        let firmware_path = self.find_binary_path(info.firmware_name).ok_or(Error::from("Failed to find firmware file"))?;
         debug!("firmware path: {:?}", firmware_path);
         let firmware = tokio::fs::read(firmware_path)
             .await
             .map_err(|_| Error::from("Failed to find load firmware"))?;
 
         let config = if !info.config_name.is_empty() {
-            let config_path = find_binary_path(info.config_name).ok_or(Error::from("Failed to find config file"))?;
+            let config_path = self.find_binary_path(info.config_name).ok_or(Error::from("Failed to find config file"))?;
             let config = tokio::fs::read(config_path)
                 .await
                 .map_err(|_| Error::from("Failed to find load firmware config.bin"))?;
