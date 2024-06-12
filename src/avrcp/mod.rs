@@ -49,8 +49,8 @@ impl Avrcp {
         }
     }
 
-    fn handle_control(&self, mut channel: Channel) {
-        let handle = channel.connection_handle;
+    fn handle_control(&self, mut channel: Channel) -> bool {
+        let handle = channel.connection_handle();
         let success = self.existing_connections.lock().insert(handle);
         if success {
             let existing_connections = self.existing_connections.clone();
@@ -83,6 +83,7 @@ impl Avrcp {
                 existing_connections.lock().remove(&handle);
             });
         }
+        success
     }
 }
 
@@ -136,7 +137,7 @@ impl State {
                     let transaction_label = packet.transaction_label;
                     if let Ok(frame) = packet.data.read_be::<Frame>() {
                         let payload = packet.data.clone();
-                        if let Err(AvcError::NotImplemented) = self.process_message(frame, packet) {
+                        if let Err(AvcError::NotImplemented) = self.process_message(frame, packet).await {
                             if !frame.ctype.is_response() {
                                 self.send_avc(
                                     transaction_label,
@@ -145,7 +146,7 @@ impl State {
                                         ..frame
                                     },
                                     payload
-                                );
+                                ).await;
                             } else {
                                 warn!("Failed to handle response: {:?}", frame);
                             }
@@ -174,16 +175,19 @@ impl State {
                                 },
                                 PassThroughFrame { op, state, data_len: 0 }
                             )
+                            .await
                             .then(|| self.outstanding_transactions[transaction] = TransactionState::PendingPassThrough(sender));
                         }
                         AvrcpCommand::VendorSpecific(cmd, pdu, params, sender) => {
                             // These should be registered using register notification
                             debug_assert!(cmd != CommandCode::Notify);
                             self.send_avrcp(transaction as u8, cmd, pdu, params)
+                                .await
                                 .then(|| self.outstanding_transactions[transaction] = TransactionState::PendingVendorDependent(cmd, sender));
                         }
                         AvrcpCommand::RegisterNotification(event, parser, sender) => {
                             self.send_avrcp(transaction as u8, CommandCode::Notify, Pdu::RegisterNotification, (event, 0u32))
+                                .await
                                 .then(|| {
                                     self.outstanding_transactions[transaction] = TransactionState::PendingNotificationRegistration(parser, sender)
                                 });
@@ -201,7 +205,7 @@ impl State {
                                         CommandCode::Changed,
                                         Pdu::RegisterNotification,
                                         (EventId::VolumeChanged, self.volume)
-                                    );
+                                    ).await;
                                 }
                             }
                         }
@@ -213,7 +217,7 @@ impl State {
         Ok(())
     }
 
-    fn process_message(&mut self, frame: Frame, mut message: Message) -> Result<(), AvcError> {
+    async fn process_message(&mut self, frame: Frame, mut message: Message) -> Result<(), AvcError> {
         match frame.opcode {
             Opcode::VendorDependent => {
                 ensure!(
@@ -296,12 +300,12 @@ impl State {
                             }
                         }
                         CommandStatus::Incomplete(pdu) => {
-                            self.send_avrcp(message.transaction_label, CommandCode::Control, Pdu::RequestContinuingResponse, pdu);
+                            self.send_avrcp(message.transaction_label, CommandCode::Control, Pdu::RequestContinuingResponse, pdu).await;
                         }
                     }
                 } else if let CommandStatus::Complete(pdu, parameters ) = self.command_assembler.process_msg(message.data)? {
-                    if let Err(err) = self.process_command(message.transaction_label, frame.ctype, pdu, parameters) {
-                        self.send_avrcp(message.transaction_label, CommandCode::Rejected, pdu, err);
+                    if let Err(err) = self.process_command(message.transaction_label, frame.ctype, pdu, parameters).await {
+                        self.send_avrcp(message.transaction_label, CommandCode::Rejected, pdu, err).await;
                     }
                 }
 
@@ -332,7 +336,7 @@ impl State {
                         opcode: Opcode::UnitInfo
                     },
                     (7u8, PANEL, BLUETOOTH_SIG_COMPANY_ID)
-                );
+                ).await;
                 Ok(())
             }
             Opcode::SubunitInfo => {
@@ -361,7 +365,7 @@ impl State {
                         opcode: Opcode::SubunitInfo
                     },
                     (page, PANEL, [0xffu8; 3])
-                );
+                ).await;
                 Ok(())
             }
             Opcode::PassThrough => {
@@ -394,23 +398,26 @@ impl State {
         }
     }
 
-    fn send_avrcp<I: Instruct<BigEndian>>(&mut self, transaction_label: u8, cmd: CommandCode, pdu: Pdu, parameters: I) -> bool {
-        fragment_command(cmd, pdu, parameters, |data| {
-            self.avctp.send_msg(Message {
+    async fn send_avrcp<I: Instruct<BigEndian>>(&mut self, transaction_label: u8, cmd: CommandCode, pdu: Pdu, parameters: I) -> bool {
+        for packet in fragment_command(cmd, pdu, parameters) {
+            let err = self.avctp.send_msg(Message {
                 transaction_label,
                 profile_id: REMOTE_CONTROL_SERVICE,
                 message_type: match cmd.is_response() {
                     true => MessageType::Response,
                     false => MessageType::Command
                 },
-                data
-            })
-        })
-        .map_err(|err| warn!("Error sending command: {:?}", err))
-        .is_ok()
+                data: packet
+            }).await;
+            if let Err(err) = err {
+                warn!("Error sending command: {:?}", err);
+                return false;
+            }
+        }
+        true
     }
 
-    fn send_avc<I: Instruct<BigEndian>>(&mut self, transaction_label: u8, frame: Frame, parameters: I) -> bool {
+    async fn send_avc<I: Instruct<BigEndian>>(&mut self, transaction_label: u8, frame: Frame, parameters: I) -> bool {
         let mut buffer = BytesMut::new();
         buffer.write(frame);
         buffer.write(parameters);
@@ -424,6 +431,7 @@ impl State {
                 },
                 data: buffer.freeze()
             })
+            .await
             .map_err(|err| warn!("Error sending command: {:?}", err))
             .is_ok()
     }
@@ -434,7 +442,7 @@ impl State {
         }
     }
 
-    fn process_command(&mut self, transaction: u8, _cmd: CommandCode, pdu: Pdu, mut parameters: Bytes) -> Result<(), ErrorCode> {
+    async fn process_command(&mut self, transaction: u8, _cmd: CommandCode, pdu: Pdu, mut parameters: Bytes) -> Result<(), ErrorCode> {
         match pdu {
             // ([AVRCP] Section 6.4.1)
             Pdu::GetCapabilities => {
@@ -447,7 +455,7 @@ impl State {
                             CommandCode::Implemented,
                             pdu,
                             (COMPANY_ID_CAPABILITY, 1, BLUETOOTH_SIG_COMPANY_ID)
-                        );
+                        ).await;
                         Ok(())
                     }
                     EVENTS_SUPPORTED_CAPABILITY => {
@@ -457,7 +465,7 @@ impl State {
                             CommandCode::Implemented,
                             pdu,
                             (EVENTS_SUPPORTED_CAPABILITY, 1, EventId::VolumeChanged)
-                        );
+                        ).await;
                         Ok(())
                     }
                     _ => {
@@ -484,7 +492,7 @@ impl State {
                     event
                 );
                 // ([AVRCP] Section 6.13.3)
-                self.send_avrcp(transaction, CommandCode::Interim, pdu, (event, self.volume));
+                self.send_avrcp(transaction, CommandCode::Interim, pdu, (event, self.volume)).await;
                 self.registered_notifications.insert(event, transaction);
                 Ok(())
             }
@@ -497,7 +505,7 @@ impl State {
             Pdu::SetAbsoluteVolume => {
                 self.volume = MAX_VOLUME.min(parameters.read_be()?);
                 parameters.finish()?;
-                self.send_avrcp(transaction, CommandCode::Accepted, pdu, self.volume);
+                self.send_avrcp(transaction, CommandCode::Accepted, pdu, self.volume).await;
                 self.trigger_event(Event::VolumeChanged(self.volume as f32 / MAX_VOLUME as f32));
                 Ok(())
             }

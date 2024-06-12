@@ -28,6 +28,7 @@ use crate::hci::acl::{AclHeader, BoundaryFlag, BroadcastFlag};
 use crate::hci::consts::{EventCode, EventMask, Status};
 use crate::hci::event_loop::{CmdResultSender, EventLoopCommand};
 use crate::host::usb::UsbHost;
+use crate::utils::IgnoreableError;
 
 //TODO make generic over transport
 pub struct Hci {
@@ -144,6 +145,21 @@ impl Hci {
         Ok(())
     }
 }
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, thiserror::Error)]
+pub enum AclSendError {
+    #[error("The underlying event loop has been closed")]
+    EventLoopClosed,
+    #[error("Failed to build packet: {0}")]
+    InvalidData(#[from] instructor::Error)
+}
+
+impl IgnoreableError for AclSendError {
+    fn should_log(&self) -> bool {
+        matches!(self, AclSendError::InvalidData(_))
+    }
+}
+
 #[derive(Clone)]
 pub struct AclSender {
     sender: MpscSender<Bytes>,
@@ -151,7 +167,7 @@ pub struct AclSender {
 }
 
 impl AclSender {
-    pub fn send(&self, handle: u16, pdu: Bytes) -> Result<(), Error> {
+    pub fn send(&self, handle: u16, pdu: Bytes) -> Result<(), AclSendError> {
         //trace!("Sending ACL data to handle 0x{:04X}", handle);
         let mut buffer = BytesMut::with_capacity(512);
         let mut pb = BoundaryFlag::FirstNonAutomaticallyFlushable;
@@ -165,7 +181,7 @@ impl AclSender {
             buffer.put(chunk);
             self.sender
                 .send(buffer.split().freeze())
-                .map_err(|_| Error::EventLoopClosed)?;
+                .map_err(|_| AclSendError::EventLoopClosed)?;
             pb = BoundaryFlag::Continuing;
         }
         Ok(())

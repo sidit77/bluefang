@@ -16,11 +16,12 @@ pub use service::ServiceAttribute;
 use tokio::spawn;
 use tracing::{error, trace, warn};
 
-use crate::l2cap::channel::Channel;
+use crate::l2cap::channel::{Channel, Error as L2capError};
 use crate::l2cap::{ProtocolHandler, SDP_PSM};
 use crate::sdp::error::{Error, SdpErrorCodes};
 use crate::sdp::service::Service;
-use crate::{ensure, hci};
+use crate::ensure;
+use crate::utils::catch_error;
 
 pub trait ServiceRecord {
     fn handle(&self) -> u32;
@@ -58,7 +59,7 @@ impl ProtocolHandler for Sdp {
         SDP_PSM as u64
     }
 
-    fn handle(&self, mut channel: Channel) {
+    fn handle(&self, mut channel: Channel) -> bool {
         let server = self.clone();
         spawn(async move {
             if let Err(err) = channel.configure().await {
@@ -73,11 +74,12 @@ impl ProtocolHandler for Sdp {
                 });
             trace!("SDP connection closed");
         });
+        true
     }
 }
 
 impl Sdp {
-    async fn handle_connection(self, mut channel: Channel) -> Result<(), hci::Error> {
+    async fn handle_connection(self, mut channel: Channel) -> Result<(), L2capError> {
         let mut buffer = BytesMut::new();
         while let Some(mut request) = channel.read().await {
             let Ok(SdpHeader { pdu, transaction_id, .. }) = request
@@ -193,7 +195,7 @@ impl Sdp {
                 parameter_length: Length::new(reply.byte_size())?
             });
             packet.write(reply);
-            channel.write(packet.freeze())?;
+            channel.write(packet.freeze()).await?;
         }
         Ok(())
     }
@@ -237,13 +239,6 @@ fn convert_attribute_id_list(list: DataElement) -> Result<Vec<RangeInclusive<u16
             _ => Err(Error::UnexpectedDataType)
         })
         .collect::<Result<Vec<_>, _>>()
-}
-
-fn catch_error<F, E, R>(f: F) -> Result<R, E>
-where
-    F: FnOnce() -> Result<R, E>
-{
-    f()
 }
 
 #[derive(Debug, Exstruct, Instruct)]

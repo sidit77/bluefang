@@ -3,6 +3,7 @@ mod futures;
 mod iter;
 mod mutex_cell;
 
+use std::error::Error;
 use std::fmt::{Debug, Formatter};
 
 pub use bytes::{FromStruct, SliceExt};
@@ -10,6 +11,7 @@ pub use futures::*;
 pub use iter::IteratorExt;
 pub use mutex_cell::MutexCell;
 use tokio::sync::mpsc::UnboundedSender;
+use tracing::warn;
 
 #[macro_export]
 macro_rules! ensure {
@@ -88,3 +90,45 @@ impl<T: Clone> DoubleEndedIterator for RepeatN<T> {
 }
 
 impl<T: Clone> ExactSizeIterator for RepeatN<T> {}
+
+pub fn catch_error<F, E, R>(f: F) -> Result<R, E>
+    where
+        F: FnOnce() -> Result<R, E>
+{
+    f()
+}
+
+pub trait IgnoreableError {
+    fn should_log(&self) -> bool;
+}
+
+pub trait ResultExt<E> {
+    fn ignore(self);
+}
+
+impl<E: IgnoreableError + Error> ResultExt<E> for Result<(), E> {
+    #[track_caller]
+    fn ignore(self) {
+        if let Err(e) = self {
+            if e.should_log() {
+                warn!("Unexpected error at {}: {}", std::panic::Location::caller(), e);
+            }
+        }
+    }
+}
+/*
+
+pub struct InstructFn<F>(F);
+
+impl<E, B, F> Instruct<E> for InstructFn<F>
+    where
+        E: Endian,
+        B: BufferMut,
+        F: Fn(&mut B)
+{
+    fn write_to_buffer<B: BufferMut>(&self, buffer: &mut B) {
+        self.0(buffer);
+    }
+}
+
+ */

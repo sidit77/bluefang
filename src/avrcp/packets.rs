@@ -161,11 +161,12 @@ impl CommandAssembler {
         }
     }
 }
-
-pub fn fragment_command<P, F, E>(cmd: CommandCode, pdu: Pdu, parameters: P, mut func: F) -> Result<(), E>
+/*
+pub async fn fragment_command<P, F, R, E>(cmd: CommandCode, pdu: Pdu, parameters: P, mut func: F) -> Result<(), E>
 where
     P: Instruct<BigEndian>,
-    F: FnMut(Bytes) -> Result<(), E>
+    R: Future<Output = Result<(), E>>,
+    F: FnMut(Bytes) -> R
 {
     const MAX_PAYLOAD_SIZE: usize = 512 - 3 - 3 - 3;
     let mut buffer = BytesMut::new();
@@ -192,12 +193,50 @@ where
             parameter_length: payload.len() as u16
         });
         buffer.put(payload);
-        func(buffer.split().freeze())?;
+        func(buffer.split().freeze()).await?;
         first = false;
         !parameters.is_empty()
     } {}
     Ok(())
 }
+
+ */
+
+pub fn fragment_command<P>(cmd: CommandCode, pdu: Pdu, parameters: P) -> impl Iterator<Item=Bytes>
+    where
+        P: Instruct<BigEndian>,
+{
+    const MAX_PAYLOAD_SIZE: usize = 512 - 3 - 3 - 3;
+    let mut buffer = BytesMut::new();
+    buffer.write(parameters);
+    let mut parameters = buffer.split().freeze();
+    let mut first = true;
+    std::iter::from_fn(move || {
+        ensure!(first || !parameters.is_empty());
+        buffer.write(Frame {
+            ctype: cmd,
+            subunit: PANEL,
+            opcode: Opcode::VendorDependent
+        });
+        buffer.write_be(BLUETOOTH_SIG_COMPANY_ID);
+        let payload = parameters.split_to(MAX_PAYLOAD_SIZE.min(parameters.len()));
+        let packet_type = match (first, parameters.is_empty()) {
+            (true, true) => PacketType::Single,
+            (true, false) => PacketType::Start,
+            (false, false) => PacketType::Continue,
+            (false, true) => PacketType::End
+        };
+        buffer.write(CommandHeader {
+            pdu,
+            packet_type,
+            parameter_length: payload.len() as u16
+        });
+        buffer.put(payload);
+        first = false;
+        Some(buffer.split().freeze())
+    })
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -208,15 +247,8 @@ mod tests {
 
     #[test]
     pub fn test_fragmentation() {
-        fragment_command(
-            CommandCode::Interim,
-            Pdu::RegisterNotification,
-            (EventId::VolumeChanged, 0u8),
-            |data| {
-                assert_eq!(&[0x0F, 0x48, 0x00, 0x00, 0x19, 0x58, 0x31, 0x00, 0x00, 0x02, 0x0D, 0x00], data.chunk());
-                Ok::<(), ()>(())
-            }
-        )
-        .unwrap()
+        let mut packets = fragment_command(CommandCode::Interim, Pdu::RegisterNotification, (EventId::VolumeChanged, 0u8));
+        assert_eq!(&[0x0F, 0x48, 0x00, 0x00, 0x19, 0x58, 0x31, 0x00, 0x00, 0x02, 0x0D, 0x00], packets.next().unwrap().chunk());
+        assert_eq!(None, packets.next());
     }
 }

@@ -1,15 +1,16 @@
 pub mod channel;
 pub mod signaling;
+pub mod configuration;
 
 use std::collections::BTreeMap;
 use std::ops::Range;
-use std::sync::atomic::AtomicU8;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
 use bytes::Bytes;
 use instructor::utils::Length;
 use instructor::{Buffer, Exstruct, Instruct};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender as MpscSender};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedSender as MpscSender, UnboundedReceiver as MpscReceiver};
 use tokio::task::JoinHandle;
 use tokio::{select, spawn};
 use tracing::{debug, trace, warn};
@@ -19,6 +20,7 @@ use crate::hci::acl::{AclDataAssembler, AclHeader};
 use crate::hci::consts::{EventCode, LinkType, RemoteAddr, Status};
 use crate::hci::{AclSender, Error, Hci};
 use crate::l2cap::channel::Channel;
+use crate::l2cap::configuration::ConfigurationParameter;
 
 pub const SDP_PSM: u16 = 0x0001;
 pub const AVCTP_PSM: u16 = 0x0017;
@@ -41,11 +43,6 @@ impl L2capServerBuilder {
         self
     }
 
-    //pub fn with_server<P: Into<u64>, S: Server + Send + 'static>(mut self, psm: P, server: S) -> Self {
-    //    self.servers.insert(psm.into(), Box::new(server));
-    //    self
-    //}
-
     pub fn spawn(self, hci: Arc<Hci>) -> Result<JoinHandle<()>, Error> {
         let mut data = {
             let (tx, rx) = unbounded_channel();
@@ -67,7 +64,7 @@ impl L2capServerBuilder {
                 connections: Default::default(),
                 handlers: self.handlers,
                 channels: Default::default(),
-                next_signaling_id: Arc::new(Default::default())
+                next_signaling_id: SignalingIds::default()
             };
 
             loop {
@@ -103,7 +100,7 @@ struct State {
     connections: BTreeMap<u16, PhysicalConnection>,
     handlers: BTreeMap<u64, Box<dyn ProtocolHandler>>,
     channels: BTreeMap<u16, (u16, MpscSender<ChannelEvent>)>,
-    next_signaling_id: Arc<AtomicU8>
+    next_signaling_id: SignalingIds
 }
 
 impl State {
@@ -113,12 +110,15 @@ impl State {
             .ok_or(Error::UnknownConnectionHandle(handle))
     }
 
-    fn send_channel_msg(&self, cid: u16, msg: ChannelEvent) -> Result<(), Error> {
+    fn send_channel_msg(&mut self, cid: u16, msg: ChannelEvent) -> Result<(), Error> {
         let (_, channel) = self
             .channels
             .get(&cid)
             .ok_or(Error::UnknownChannelId(cid))?;
-        channel.send(msg).expect("Channel closed");
+        if channel.send(msg).is_err() {
+            warn!("Channel closed: {:?}", cid);
+            self.channels.remove(&cid);
+        }
         Ok(())
     }
 
@@ -210,8 +210,8 @@ impl State {
         }
     }
 
-    fn handle_channel_connection(&mut self, handle: u16, psm: u64, scid: u16) -> Result<u16, ConnectionResult> {
-        debug!("        Connection request: PSM={:04X} SCID={:04X}", psm, scid);
+    fn handle_channel_connection(&mut self, handle: u16, psm: u64, scid: u16, rx: MpscReceiver<ChannelEvent>) -> Result<u16, ConnectionResult> {
+        debug!("Connection request: PSM={:04X} SCID={:04X}", psm, scid);
         let server = self
             .handlers
             .get_mut(&psm)
@@ -225,12 +225,12 @@ impl State {
             .find(|&cid| !self.channels.contains_key(&cid) && cid != scid)
             .ok_or(ConnectionResult::RefusedNoResources)?;
 
-        let (tx, rx) = unbounded_channel();
         let channel = Channel::new(handle, scid, dcid, rx, self.sender.clone(), self.next_signaling_id.clone());
-        self.channels.insert(dcid, (scid, tx));
-        server.handle(channel);
-
-        Ok(dcid)
+        if server.handle(channel) {
+            Ok(dcid)
+        } else {
+            Err(ConnectionResult::RefusedNoResources)
+        }
     }
 }
 
@@ -275,12 +275,37 @@ pub enum ConfigureResult {
     FlowSpecRejected = 0x0005
 }
 
+#[derive(Clone)]
+pub struct SignalingIds(Arc<AtomicU8>);
+
+impl Default for SignalingIds {
+    fn default() -> Self {
+        Self(Arc::new(AtomicU8::new(1)))
+    }
+}
+
+impl SignalingIds {
+    pub fn next(&self) -> u8 {
+        let mut current = self.0.load(Ordering::Relaxed);
+        loop {
+            let next = current.checked_add(1).unwrap_or(1);
+            match self.0.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => break,
+                Err(i) => current = i
+            }
+        }
+        current
+    }
+}
+
+
 pub enum ChannelEvent {
+    OpenChannelResponseSent(bool),
     DataReceived(Bytes),
-    ConfigurationRequest(u8, Bytes),
-    ConfigurationResponse(u8, ConfigureResult, Bytes),
-    DisconnectRequest,
-    DisconnectResponse
+    ConfigurationRequest(u8, Vec<ConfigurationParameter>),
+    ConfigurationResponse(u8, ConfigureResult, Vec<ConfigurationParameter>),
+    DisconnectRequest(u8),
+    DisconnectResponse(u8)
 }
 
 pub trait ProtocolHandlerProvider {
@@ -291,7 +316,7 @@ pub trait ProtocolHandler: Send {
     fn psm(&self) -> u64;
 
     //TODO Add a return code to indicate if the channel was expected
-    fn handle(&self, channel: Channel);
+    fn handle(&self, channel: Channel) -> bool;
 }
 
 impl<P> ProtocolHandlerProvider for P
@@ -312,7 +337,7 @@ pub struct ProtocolDelegate<H, F> {
 impl<H, F> ProtocolDelegate<H, F>
 where
     H: Send + 'static,
-    F: Fn(&H, Channel) + Send + 'static
+    F: Fn(&H, Channel) -> bool + Send + 'static
 {
     pub fn boxed<I: Into<u64>>(psm: I, handler: H, map_func: F) -> Box<dyn ProtocolHandler> {
         Box::new(Self {
@@ -326,13 +351,13 @@ where
 impl<H, F> ProtocolHandler for ProtocolDelegate<H, F>
 where
     H: Send,
-    F: Fn(&H, Channel) + Send
+    F: Fn(&H, Channel) -> bool + Send
 {
     fn psm(&self) -> u64 {
         self.psm
     }
 
-    fn handle(&self, channel: Channel) {
+    fn handle(&self, channel: Channel) -> bool {
         (self.map_func)(&self.handler, channel)
     }
 }

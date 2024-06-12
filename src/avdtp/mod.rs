@@ -21,8 +21,7 @@ use crate::avdtp::endpoint::Stream;
 use crate::avdtp::error::ErrorCode;
 use crate::avdtp::packets::{MessageType, ServiceCategory, SignalChannelExt, SignalIdentifier, SignalMessage, SignalMessageAssembler};
 use crate::ensure;
-use crate::hci::Error;
-use crate::l2cap::channel::Channel;
+use crate::l2cap::channel::{Channel, Error};
 use crate::l2cap::{ProtocolHandler, AVDTP_PSM};
 use crate::utils::{select_all, MutexCell, OptionFuture};
 
@@ -58,8 +57,8 @@ impl ProtocolHandler for Avdtp {
         AVDTP_PSM as u64
     }
 
-    fn handle(&self, mut channel: Channel) {
-        let handle = channel.connection_handle;
+    fn handle(&self, mut channel: Channel) -> bool {
+        let handle = channel.connection_handle();
         let pending_stream = self.pending_streams.lock().get(&handle).cloned();
         match pending_stream {
             None => {
@@ -112,6 +111,7 @@ impl ProtocolHandler for Avdtp {
                 });
             }
         }
+        true
     }
 }
 
@@ -127,7 +127,7 @@ impl AvdtpSession {
         let mut assembler = SignalMessageAssembler::default();
         loop {
             select! {
-                (i, _) = select_all(&mut self.streams) => {
+                (i, _) = select_all(self.streams.iter_mut().map(Stream::process)) => {
                     debug!("Stream {} ended", i);
                     self.streams.swap_remove(i);
                 },
@@ -135,7 +135,7 @@ impl AvdtpSession {
                     Some(packet) => match assembler.process_msg(packet) {
                         Ok(Some(header)) => {
                             let reply = self.handle_signal_message(header);
-                            channel.send_signal(reply)?;
+                            channel.send_signal(reply).await?;
                         }
                         Ok(None) => continue,
                         Err(err) => {

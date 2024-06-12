@@ -1,9 +1,9 @@
 use bytes::{BufMut, Bytes, BytesMut};
 use instructor::{Buffer, BufferMut, Error, Exstruct, Instruct};
 
-use crate::l2cap::channel::Channel;
+use crate::l2cap::channel::{Channel, Error as L2capError};
 use crate::sdp::Uuid;
-use crate::{ensure, hci, log_assert};
+use crate::{ensure, log_assert};
 
 // ([AVCTP] Section 6.1)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Instruct, Exstruct)]
@@ -132,11 +132,11 @@ impl MessageAssembler {
 }
 
 pub trait ControlChannelExt {
-    fn send_msg(&mut self, message: Message) -> Result<(), hci::Error>;
+    async fn send_msg(&mut self, message: Message) -> Result<(), L2capError>;
 }
 
 impl ControlChannelExt for Channel {
-    fn send_msg(&mut self, message: Message) -> Result<(), hci::Error> {
+    async fn send_msg(&mut self, message: Message) -> Result<(), L2capError> {
         //TODO fragment message if necessary
         let mut buffer = BytesMut::new();
         buffer.write(PacketHeader {
@@ -146,7 +146,7 @@ impl ControlChannelExt for Channel {
         });
         buffer.write_be(message.profile_id.as_u16().expect("Invalid profile id"));
         buffer.put(message.data);
-        self.write(buffer.freeze())?;
+        self.write(buffer.freeze()).await?;
         Ok(())
     }
 }

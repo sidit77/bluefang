@@ -6,15 +6,19 @@ use pin_project_lite::pin_project;
 
 use crate::log_assert;
 
-pub struct SelectAll<'a, T> {
-    futures: &'a mut [T]
+#[derive(Debug)]
+#[must_use = "futures do nothing unless you `.await` or poll them"]
+pub struct SelectAll<F> {
+    inner: Vec<F>,
 }
 
-impl<'a, T: Future + Unpin> Future for SelectAll<'a, T> {
-    type Output = (usize, T::Output);
+impl<F: Unpin> Unpin for SelectAll<F> {}
+
+impl<F: Future + Unpin> Future for SelectAll<F> {
+    type Output = (usize, F::Output);
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        for (i, future) in self.futures.iter_mut().enumerate() {
+        for (i, future) in self.inner.iter_mut().enumerate() {
             if let Poll::Ready(output) = Pin::new(future).poll(cx) {
                 return Poll::Ready((i, output));
             }
@@ -23,9 +27,40 @@ impl<'a, T: Future + Unpin> Future for SelectAll<'a, T> {
     }
 }
 
-pub fn select_all<T: Future + Unpin>(futures: &mut [T]) -> SelectAll<T> {
-    SelectAll { futures }
+impl<F: Future + Unpin> FromIterator<F> for SelectAll<F> {
+    fn from_iter<T: IntoIterator<Item=F>>(iter: T) -> Self {
+        select_all(iter)
+    }
 }
+
+pub fn select_all<I>(iter: I) -> SelectAll<I::Item>
+    where
+        I: IntoIterator,
+        I::Item: Future + Unpin,
+{
+    SelectAll { inner: iter.into_iter().collect() }
+}
+
+//pub struct SelectAll<'a, T> {
+//    futures: &'a mut [T]
+//}
+//
+//impl<'a, T: Future + Unpin> Future for SelectAll<'a, T> {
+//    type Output = (usize, T::Output);
+//
+//    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+//        for (i, future) in self.futures.iter_mut().enumerate() {
+//            if let Poll::Ready(output) = Pin::new(future).poll(cx) {
+//                return Poll::Ready((i, output));
+//            }
+//        }
+//        Poll::Pending
+//    }
+//}
+//
+//pub fn select_all<T: Future + Unpin>(futures: &mut [T]) -> SelectAll<T> {
+//    SelectAll { futures }
+//}
 
 pin_project! {
     #[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]

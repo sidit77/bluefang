@@ -7,9 +7,9 @@ pub use packets::{Message, MessageType};
 use tracing::{debug, warn};
 
 use crate::avctp::packets::{ControlChannelExt, MessageAssembler};
-use crate::hci;
-use crate::l2cap::channel::Channel;
+use crate::l2cap::channel::{Channel, Error as L2capError};
 use crate::sdp::Uuid;
+use crate::utils::ResultExt;
 
 pub struct Avctp {
     channel: Channel,
@@ -42,9 +42,8 @@ impl Avctp {
                                 profile_id: msg.profile_id,
                                 data: Bytes::new()
                             })
-                            .unwrap_or_else(|err| {
-                                warn!("Failed to send invalid profile message: {:?}", err);
-                            })
+                            .await
+                            .ignore()
                     }
                 }
                 Ok(None) => continue,
@@ -57,8 +56,8 @@ impl Avctp {
         None
     }
 
-    pub fn send_msg(&mut self, message: Message) -> Result<(), hci::Error> {
+    pub async fn send_msg(&mut self, message: Message) -> Result<(), L2capError> {
         //TODO Fragment messages larger than mtu
-        self.channel.send_msg(message)
+        self.channel.send_msg(message).await
     }
 }

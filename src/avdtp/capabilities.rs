@@ -162,7 +162,7 @@ mod test {
             Capability::MediaCodec(MediaCodecCapability::Sbc(SbcMediaCodecInformation::default())),
         ];
         let mut buf = BytesMut::new();
-        buf.write(&capabilites);
+        buf.write_ref(&capabilites);
         assert_eq!(buf.chunk(), packet_bytes);
         let read_caps: Vec<Capability> = buf.read().unwrap();
         assert_eq!(read_caps, capabilites);

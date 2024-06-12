@@ -1,12 +1,13 @@
 use std::cmp::Ordering;
+use std::future::Future;
 use std::iter::repeat;
 
 use bytes::{Bytes, BytesMut};
 use instructor::{Buffer, BufferMut, Error, Exstruct, Instruct};
 use tracing::warn;
 
-use crate::l2cap::channel::Channel;
-use crate::{ensure, hci};
+use crate::l2cap::channel::{Channel, Error as L2capError};
+use crate::{ensure};
 
 // ([AVDTP] Section 8.6.2).
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Exstruct, Instruct)]
@@ -248,11 +249,11 @@ impl SignalMessageAssembler {
 }
 
 pub trait SignalChannelExt {
-    fn send_signal(&mut self, message: SignalMessage) -> Result<(), hci::Error>;
+    fn send_signal(&mut self, message: SignalMessage) -> impl Future<Output = Result<(), L2capError>>;
 }
 
 impl SignalChannelExt for Channel {
-    fn send_signal(
+    async fn send_signal(
         &mut self,
         SignalMessage {
             transaction_label,
@@ -260,7 +261,7 @@ impl SignalChannelExt for Channel {
             signal_identifier,
             data
         }: SignalMessage
-    ) -> Result<(), hci::Error> {
+    ) -> Result<(), L2capError> {
         let mut buffer = BytesMut::new();
         let (mut packet_type, chunk_size) = match data.len() + 2 <= self.remote_mtu as usize {
             true => (PacketType::Single, usize::MAX),
@@ -288,7 +289,7 @@ impl SignalChannelExt for Channel {
                 buffer.write_be(SignalIdentifierField { signal_identifier });
             }
             buffer.extend_from_slice(chunk);
-            self.write(buffer.split().freeze())?;
+            self.write(buffer.split().freeze()).await?;
             match (i + 1).cmp(&(number_of_signaling_packets as usize)) {
                 Ordering::Less => packet_type = PacketType::Continue,
                 Ordering::Equal => packet_type = PacketType::End,
@@ -339,7 +340,7 @@ mod tests {
         );
 
         let mut buffer = BytesMut::new();
-        buffer.write(&ep);
+        buffer.write(ep);
         assert_eq!(buffer.chunk(), data);
     }
 }

@@ -1,5 +1,4 @@
-use std::future::Future;
-use std::pin::Pin;
+use std::future::{Future, poll_fn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -12,8 +11,6 @@ use crate::avdtp::error::ErrorCode;
 use crate::avdtp::packets::{MediaType, StreamEndpoint, StreamEndpointType};
 use crate::ensure;
 use crate::l2cap::channel::Channel;
-use crate::l2cap::ChannelEvent;
-
 pub type StreamHandlerFactory = Box<dyn Fn(&[Capability]) -> Box<dyn StreamHandler> + Send + Sync + 'static>;
 
 pub struct LocalEndpoint {
@@ -124,32 +121,23 @@ impl Stream {
         ensure!(self.state != StreamState::Closing, ErrorCode::BadState);
         Ok(&self.capabilities)
     }
-}
 
-impl Drop for Stream {
-    fn drop(&mut self) {
-        self.endpoint_usage_lock.store(false, Ordering::SeqCst);
+    pub fn process(&mut self) -> impl Future<Output = ()> + '_ {
+        poll_fn(move |cx| self.poll(cx))
     }
-}
 
-impl Future for Stream {
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(&mut self, cx: &mut Context<'_>) -> Poll<()> {
         loop {
             match self.channel.as_mut() {
                 Some(channel) => {
-                    match channel.receiver.poll_recv(cx) {
-                        Poll::Ready(Some(ChannelEvent::DataReceived(data))) => {
+                    match channel.poll_data(cx) {
+                        Poll::Ready(Some(data)) => {
                             if self.state == StreamState::Streaming {
                                 //TODO Parse the realtime media header and do something useful with it
                                 self.handler.on_data(data.slice(12..));
                             } else {
                                 warn!("Data received while not streaming");
                             }
-                        }
-                        Poll::Ready(Some(_)) => {
-                            warn!("Non data packets in configured state");
                         }
                         Poll::Ready(None) => {
                             self.state = StreamState::Closing;
@@ -167,6 +155,12 @@ impl Future for Stream {
                 }
             }
         }
+    }
+}
+
+impl Drop for Stream {
+    fn drop(&mut self) {
+        self.endpoint_usage_lock.store(false, Ordering::SeqCst);
     }
 }
 

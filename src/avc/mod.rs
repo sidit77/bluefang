@@ -266,7 +266,7 @@ mod tests {
         let mut buf = BytesMut::new();
         for (unit, bytes) in testcases.iter() {
             buf.clear();
-            buf.write_be(unit);
+            buf.write_be(*unit);
             assert_eq!(buf.chunk(), *bytes);
             let parsed: Subunit = buf.read_be().unwrap();
             assert_eq!(parsed, *unit);
