@@ -154,8 +154,7 @@ impl Channel {
 
     #[instrument(parent = &self.span, skip(self))]
     pub async fn disconnect(&mut self) -> Result<(), Error> {
-        self.send_signaling(None, SignalingCode::DisconnectionRequest, (self.remote_cid, self.local_cid))
-            .ignore();
+        self.send_signaling(None, SignalingCode::DisconnectionRequest, (self.remote_cid, self.local_cid))?;
         self.set_state(State::WaitDisconnect);
         self.wait_for_disconnect().await
     }
@@ -236,7 +235,7 @@ impl Channel {
                     },
                     DisconnectRequest(id) => {
                         // Send DisconnectRsp
-                        self.send_disconnect_response(id).ignore();
+                        self.send_disconnect_response(id)?;
                         event!(self.set_state(State::Closed));
                     }
                     DisconnectResponse(_) | OpenChannelResponseSent(_) => { /* Ignore */ }
@@ -249,7 +248,7 @@ impl Channel {
                     }
                     DisconnectRequest(id) => {
                         // Send DisconnectRsp
-                        self.send_disconnect_response(id).ignore();
+                        self.send_disconnect_response(id)?;
                         event!(self.set_state(State::Closed));
                     }
                     DataReceived(data) => return Poll::Ready(Ok(Event::DataReceived(data))),
@@ -259,11 +258,11 @@ impl Channel {
                 State::WaitDisconnect => match data {
                     ConfigurationRequest(id, _) => {
                         // Send CommandReject with reason Invalid CID
-                        self.send_invalid_cid(id).ignore()
+                        self.send_invalid_cid(id)?;
                     }
                     DisconnectRequest(id) => {
                         // Send DisconnectRsp
-                        self.send_disconnect_response(id).ignore();
+                        self.send_disconnect_response(id)?;
                         event!(self.set_state(State::Closed));
                     }
                     DisconnectResponse(_) => {
@@ -415,7 +414,9 @@ impl Drop for Channel {
     fn drop(&mut self) {
         if self.state != State::Closed {
             // The first yield point should be after sending the disconnect message
-            now_or_never(self.disconnect());
+            if let Some(result) = now_or_never(self.disconnect()) {
+                result.ignore();
+            }
         }
     }
 }
