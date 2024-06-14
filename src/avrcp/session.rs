@@ -3,17 +3,17 @@ use std::future::Future;
 
 use bytes::{Bytes, BytesMut};
 use instructor::{BigEndian, Buffer, BufferMut, Exstruct};
-use thiserror::Error;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::oneshot::Sender as OneshotSender;
 
 use crate::avc::{CommandCode, PassThroughFrame, PassThroughOp, PassThroughState};
+use crate::avrcp::error::Error;
 use crate::avrcp::notifications::CurrentTrack;
 use crate::avrcp::packets::{EventId, MediaAttributeId, Pdu, EVENTS_SUPPORTED_CAPABILITY};
 use crate::ensure;
 use crate::utils::FromStruct;
 
-pub type CommandResponseSender = OneshotSender<Result<Bytes, SessionError>>;
+pub type CommandResponseSender = OneshotSender<Result<Bytes, Error>>;
 #[derive(Debug)]
 pub enum AvrcpCommand {
     PassThrough(PassThroughOp, PassThroughState, CommandResponseSender),
@@ -43,35 +43,35 @@ impl AvrcpSession {
         self.events.recv()
     }
 
-    async fn send_vendor_cmd(&self, code: CommandCode, pdu: Pdu, parameters: Bytes) -> Result<Bytes, SessionError> {
+    async fn send_vendor_cmd(&self, code: CommandCode, pdu: Pdu, parameters: Bytes) -> Result<Bytes, Error> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.commands
             .send(AvrcpCommand::VendorSpecific(code, pdu, parameters, tx))
             .await
-            .map_err(|_| SessionError::SessionClosed)?;
-        rx.await.map_err(|_| SessionError::SessionClosed)?
+            .map_err(|_| Error::SessionClosed)?;
+        rx.await.map_err(|_| Error::SessionClosed)?
     }
 
-    async fn send_action(&self, op: PassThroughOp, state: PassThroughState) -> Result<(), SessionError> {
+    async fn send_action(&self, op: PassThroughOp, state: PassThroughState) -> Result<(), Error> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.commands
             .send(AvrcpCommand::PassThrough(op, state, tx))
             .await
-            .map_err(|_| SessionError::SessionClosed)?;
-        let mut result = rx.await.map_err(|_| SessionError::SessionClosed)??;
+            .map_err(|_| Error::SessionClosed)?;
+        let mut result = rx.await.map_err(|_| Error::SessionClosed)??;
         let frame: PassThroughFrame = result.read_be()?;
-        ensure!(frame.op == op && frame.state == state, SessionError::InvalidReturnData);
+        ensure!(frame.op == op && frame.state == state, Error::InvalidReturnData);
         Ok(())
     }
 
-    pub async fn notify_local_volume_change(&self, volume: f32) -> Result<(), SessionError> {
+    pub async fn notify_local_volume_change(&self, volume: f32) -> Result<(), Error> {
         self.commands
             .send(AvrcpCommand::UpdatedVolume(volume))
             .await
-            .map_err(|_| SessionError::SessionClosed)
+            .map_err(|_| Error::SessionClosed)
     }
 
-    pub async fn play(&self) -> Result<(), SessionError> {
+    pub async fn play(&self) -> Result<(), Error> {
         self.send_action(PassThroughOp::Play, PassThroughState::Pressed)
             .await?;
         self.send_action(PassThroughOp::Play, PassThroughState::Released)
@@ -79,7 +79,7 @@ impl AvrcpSession {
         Ok(())
     }
 
-    pub async fn pause(&self) -> Result<(), SessionError> {
+    pub async fn pause(&self) -> Result<(), Error> {
         self.send_action(PassThroughOp::Pause, PassThroughState::Pressed)
             .await?;
         self.send_action(PassThroughOp::Pause, PassThroughState::Released)
@@ -87,7 +87,7 @@ impl AvrcpSession {
         Ok(())
     }
 
-    pub async fn get_supported_events(&self) -> Result<Vec<EventId>, SessionError> {
+    pub async fn get_supported_events(&self) -> Result<Vec<EventId>, Error> {
         let mut result = self
             .send_vendor_cmd(
                 CommandCode::Status,
@@ -95,7 +95,7 @@ impl AvrcpSession {
                 Bytes::from_struct_be(EVENTS_SUPPORTED_CAPABILITY)
             )
             .await?;
-        ensure!(result.read_be::<u8>()? == EVENTS_SUPPORTED_CAPABILITY, SessionError::InvalidReturnData);
+        ensure!(result.read_be::<u8>()? == EVENTS_SUPPORTED_CAPABILITY, Error::InvalidReturnData);
         let number_of_events: u8 = result.read_be()?;
         let mut events = Vec::with_capacity(number_of_events as usize);
         for _ in 0..number_of_events {
@@ -104,14 +104,14 @@ impl AvrcpSession {
         Ok(events)
     }
 
-    pub async fn register_notification<N: Notification>(&self) -> Result<N, SessionError> {
+    pub async fn register_notification<N: Notification>(&self) -> Result<N, Error> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.commands
             .send(AvrcpCommand::RegisterNotification(N::EVENT_ID, N::read, tx))
             .await
-            .map_err(|_| SessionError::SessionClosed)?;
-        let mut result = rx.await.map_err(|_| SessionError::SessionClosed)??;
-        ensure!(result.read_be::<EventId>()? == N::EVENT_ID, SessionError::InvalidReturnData);
+            .map_err(|_| Error::SessionClosed)?;
+        let mut result = rx.await.map_err(|_| Error::SessionClosed)??;
+        ensure!(result.read_be::<EventId>()? == N::EVENT_ID, Error::InvalidReturnData);
         let notification: N = result.read_be()?;
         result.finish()?;
         Ok(notification)
@@ -120,7 +120,7 @@ impl AvrcpSession {
     // ([AVRCP] Section 6.6.1)
     pub async fn get_current_media_attributes(
         &self, filter: Option<&[MediaAttributeId]>
-    ) -> Result<BTreeMap<MediaAttributeId, String>, SessionError> {
+    ) -> Result<BTreeMap<MediaAttributeId, String>, Error> {
         const PLAYING: u64 = 0x00;
         const UTF8: u16 = 106;
         debug_assert!(filter.map_or(true, |filter| !filter.is_empty()), "Filter should not be empty");
@@ -142,35 +142,12 @@ impl AvrcpSession {
         let mut results = BTreeMap::new();
         for _ in 0..number_of_attributes {
             let id: MediaAttributeId = result.read_be()?;
-            ensure!(result.read_be::<u16>()? == UTF8, SessionError::InvalidReturnData);
+            ensure!(result.read_be::<u16>()? == UTF8, Error::InvalidReturnData);
             let length: u16 = result.read_be()?;
             let value = result.split_to(length as usize);
             results.insert(id, String::from_utf8_lossy(&value).to_string());
         }
         Ok(results)
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Error)]
-pub enum SessionError {
-    #[error("The AVRCP session has been closed.")]
-    SessionClosed,
-    #[error("All 16 transaction ids are currently occupied.")]
-    NoTransactionIdAvailable,
-    #[error("The receiver does not implemented the command.")]
-    NotImplemented,
-    //TODO and the reason to this variant
-    #[error("The receiver rejected the command.")]
-    Rejected,
-    #[error("The receiver is currently unable to perform this action due to being in a transient state.")]
-    Busy,
-    #[error("The returned data has an invalid format.")]
-    InvalidReturnData
-}
-
-impl From<instructor::Error> for SessionError {
-    fn from(_: instructor::Error) -> Self {
-        Self::InvalidReturnData
     }
 }
 

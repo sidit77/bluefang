@@ -1,4 +1,6 @@
 use instructor::{Exstruct, Instruct};
+use thiserror::Error;
+use tracing::error;
 
 #[allow(dead_code)]
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Instruct, Exstruct)]
@@ -29,27 +31,46 @@ pub enum ErrorCode {
 }
 
 impl From<instructor::Error> for ErrorCode {
-    fn from(_: instructor::Error) -> Self {
+    #[track_caller]
+    fn from(value: instructor::Error) -> Self {
+        error!("Parsing error {} at {}", value, std::panic::Location::caller());
         Self::ParameterContentError
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum AvcError {
-    NotImplemented //Parsing(instructor::Error),
-                   //Avrcp(ErrorCode),
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Error)]
+pub enum Error {
+    #[error("The AVRCP session has been closed.")]
+    SessionClosed,
+    #[error("All 16 transaction ids are currently occupied.")]
+    NoTransactionIdAvailable,
+    #[error("The receiver does not implemented the command.")]
+    NotImplemented,
+    #[error("The receiver rejected the command (reason: {0:?}).")]
+    Rejected(ErrorCode),
+    #[error("The receiver is currently unable to perform this action due to being in a transient state.")]
+    Busy,
+    #[error("The returned data has an invalid format.")]
+    InvalidReturnData
 }
 
-impl From<instructor::Error> for AvcError {
-    fn from(_value: instructor::Error) -> Self {
-        //Self::Parsing(value)
-        // idk
-        Self::NotImplemented
+
+impl From<instructor::Error> for Error {
+    #[track_caller]
+    fn from(value: instructor::Error) -> Self {
+        error!("Parsing error {} at {}", value, std::panic::Location::caller());
+        Self::InvalidReturnData
     }
 }
 
-//impl From<ErrorCode> for AvcError {
-//    fn from(value: ErrorCode) -> Self {
-//        Self::Avrcp(value)
-//    }
-//}
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub struct NotImplemented;
+
+impl From<instructor::Error> for NotImplemented {
+    #[track_caller]
+    fn from(value: instructor::Error) -> Self {
+        error!("Parsing error {} at {}", value, std::panic::Location::caller());
+        NotImplemented
+    }
+}
+

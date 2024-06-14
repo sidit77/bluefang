@@ -6,19 +6,12 @@ use crate::sdp::ids::attributes::{
 };
 use crate::sdp::ids::browse_groups::PUBLIC_BROWSE_ROOT;
 use crate::sdp::ids::protocols::{AVCTP, L2CAP};
-use crate::sdp::{DataElement, ServiceAttribute, ServiceRecord, Uuid};
+use crate::sdp::{DataElement, ServiceAttribute, ServiceRecord};
+use crate::sdp::ids::service_classes::{AV_REMOTE_CONTROL, AV_REMOTE_CONTROL_CONTROLLER, AV_REMOTE_CONTROL_TARGET};
 
-// ([Assigned Numbers] Section 3.3).
-pub const REMOTE_CONTROL_TARGET_SERVICE: Uuid = Uuid::from_u16(0x110C);
-
-// ([Assigned Numbers] Section 3.3).
-pub const REMOTE_CONTROL_SERVICE: Uuid = Uuid::from_u16(0x110E);
-
-// ([Assigned Numbers] Section 3.3).
-pub const REMOTE_CONTROL_CONTROLLER_SERVICE: Uuid = Uuid::from_u16(0x110F);
 
 // ([Assigned Numbers] Section 5.1.2).
-pub const SUPPORTED_FEATURES_ID: u16 = 0x0311;
+const SUPPORTED_FEATURES_ID: u16 = 0x0311;
 
 #[derive(Debug)]
 pub struct AvrcpControllerServiceRecord {
@@ -46,7 +39,7 @@ impl ServiceRecord for AvrcpControllerServiceRecord {
             ServiceAttribute::new(BROWSE_GROUP_LIST_ID, DataElement::from_iter([PUBLIC_BROWSE_ROOT])),
             ServiceAttribute::new(
                 SERVICE_CLASS_ID_LIST_ID,
-                DataElement::from_iter([REMOTE_CONTROL_SERVICE, REMOTE_CONTROL_CONTROLLER_SERVICE])
+                DataElement::from_iter([AV_REMOTE_CONTROL, AV_REMOTE_CONTROL_CONTROLLER])
             ),
             ServiceAttribute::new(
                 PROTOCOL_DESCRIPTOR_LIST_ID,
@@ -54,7 +47,7 @@ impl ServiceRecord for AvrcpControllerServiceRecord {
             ),
             ServiceAttribute::new(
                 BLUETOOTH_PROFILE_DESCRIPTOR_LIST_ID,
-                DataElement::from_iter([(REMOTE_CONTROL_SERVICE, avcrp_version)])
+                DataElement::from_iter([(AV_REMOTE_CONTROL, avcrp_version)])
             ),
             ServiceAttribute::new(SUPPORTED_FEATURES_ID, SupportedControllerFeatures::CATEGORY_1),
         ]
@@ -106,14 +99,14 @@ impl ServiceRecord for AvrcpTargetServiceRecord {
         vec![
             ServiceAttribute::new(SERVICE_RECORD_HANDLE_ID, self.handle),
             ServiceAttribute::new(BROWSE_GROUP_LIST_ID, DataElement::from_iter([PUBLIC_BROWSE_ROOT])),
-            ServiceAttribute::new(SERVICE_CLASS_ID_LIST_ID, DataElement::from_iter([REMOTE_CONTROL_TARGET_SERVICE])),
+            ServiceAttribute::new(SERVICE_CLASS_ID_LIST_ID, DataElement::from_iter([AV_REMOTE_CONTROL_TARGET])),
             ServiceAttribute::new(
                 PROTOCOL_DESCRIPTOR_LIST_ID,
                 DataElement::from_iter([(L2CAP, AVCTP_PSM), (AVCTP, avctp_version)])
             ),
             ServiceAttribute::new(
                 BLUETOOTH_PROFILE_DESCRIPTOR_LIST_ID,
-                DataElement::from_iter([(REMOTE_CONTROL_SERVICE, avcrp_version)])
+                DataElement::from_iter([(AV_REMOTE_CONTROL, avcrp_version)])
             ),
             ServiceAttribute::new(SUPPORTED_FEATURES_ID, SupportedTargetFeatures::CATEGORY_2),
         ]

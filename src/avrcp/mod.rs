@@ -12,11 +12,10 @@ use tracing::{error, trace, warn};
 
 use crate::avc::{CommandCode, Frame, Opcode, PassThroughFrame, Subunit, SubunitType};
 use crate::avctp::{Avctp, Message, MessageType};
-use crate::avrcp::error::{AvcError, ErrorCode};
+use crate::avrcp::error::NotImplemented;
 use crate::avrcp::packets::{
     fragment_command, CommandAssembler, CommandStatus, Pdu, BLUETOOTH_SIG_COMPANY_ID, COMPANY_ID_CAPABILITY, EVENTS_SUPPORTED_CAPABILITY, PANEL
 };
-use crate::avrcp::sdp::REMOTE_CONTROL_SERVICE;
 use crate::avrcp::session::{AvrcpCommand, CommandResponseSender, EventParser};
 use crate::l2cap::channel::Channel;
 use crate::l2cap::{ProtocolDelegate, ProtocolHandler, ProtocolHandlerProvider, AVCTP_PSM};
@@ -28,8 +27,10 @@ mod packets;
 pub mod sdp;
 mod session;
 
+pub use error::{Error, ErrorCode};
 pub use packets::{EventId, MediaAttributeId};
-pub use session::{notifications, AvrcpSession, Event, Notification, SessionError};
+pub use session::{notifications, AvrcpSession, Event, Notification};
+use crate::sdp::ids::service_classes::AV_REMOTE_CONTROL;
 
 #[derive(Clone)]
 pub struct Avrcp {
@@ -65,7 +66,7 @@ impl Avrcp {
                 let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(16);
                 let (evt_tx, evt_rx) = tokio::sync::mpsc::channel(16);
                 let mut state = State {
-                    avctp: Avctp::new(channel, [REMOTE_CONTROL_SERVICE]),
+                    avctp: Avctp::new(channel, [AV_REMOTE_CONTROL]),
                     command_assembler: Default::default(),
                     response_assembler: Default::default(),
                     volume: MAX_VOLUME,
@@ -139,7 +140,7 @@ impl State {
                     let transaction_label = packet.transaction_label;
                     if let Ok(frame) = packet.data.read_be::<Frame>() {
                         let payload = packet.data.clone();
-                        if let Err(AvcError::NotImplemented) = self.process_message(frame, packet).await {
+                        if let Err(NotImplemented) = self.process_message(frame, packet).await {
                             if !frame.ctype.is_response() {
                                 self.send_avc(
                                     transaction_label,
@@ -163,7 +164,7 @@ impl State {
                         .position(|x| x.is_free())
                     else {
                         if let Some(sender) = cmd.into_response_sender() {
-                            let _ = sender.send(Err(SessionError::NoTransactionIdAvailable));
+                            let _ = sender.send(Err(Error::NoTransactionIdAvailable));
                         }
                         continue;
                     };
@@ -221,19 +222,19 @@ impl State {
         Ok(())
     }
 
-    async fn process_message(&mut self, frame: Frame, mut message: Message) -> Result<(), AvcError> {
+    async fn process_message(&mut self, frame: Frame, mut message: Message) -> Result<(), NotImplemented> {
         match frame.opcode {
             Opcode::VendorDependent => {
                 ensure!(
                     frame.subunit == PANEL,
-                    AvcError::NotImplemented,
+                    NotImplemented,
                     "Unsupported subunit: {:?}",
                     frame.subunit
                 );
                 let company_id: u24 = message.data.read_be::<u24>()?;
                 ensure!(
                     company_id == BLUETOOTH_SIG_COMPANY_ID,
-                    AvcError::NotImplemented,
+                    NotImplemented,
                     "Unsupported company id: {:#06x}",
                     company_id
                 );
@@ -244,21 +245,21 @@ impl State {
                             match transaction {
                                 TransactionState::PendingVendorDependent(CommandCode::Control, _) => {
                                     let reply = match frame.ctype {
-                                        CommandCode::NotImplemented => Err(SessionError::NotImplemented),
+                                        CommandCode::NotImplemented => Err(Error::NotImplemented),
                                         CommandCode::Accepted => Ok(parameters),
-                                        CommandCode::Rejected => Err(SessionError::Rejected),
+                                        CommandCode::Rejected => Err(Error::Rejected(parameters.read_be().unwrap_or(ErrorCode::ParameterContentError))),
                                         CommandCode::Interim => return Ok(()),
-                                        _ => Err(SessionError::InvalidReturnData)
+                                        _ => Err(Error::InvalidReturnData)
                                     };
                                     let _ = transaction.take_sender().send(reply);
                                 }
                                 TransactionState::PendingVendorDependent(CommandCode::Status, _) => {
                                     let reply = match frame.ctype {
-                                        CommandCode::NotImplemented => Err(SessionError::NotImplemented),
+                                        CommandCode::NotImplemented => Err(Error::NotImplemented),
                                         CommandCode::Implemented => Ok(parameters),
-                                        CommandCode::Rejected => Err(SessionError::Rejected),
-                                        CommandCode::InTransition => Err(SessionError::Busy),
-                                        _ => Err(SessionError::InvalidReturnData)
+                                        CommandCode::Rejected => Err(Error::Rejected(parameters.read_be().unwrap_or(ErrorCode::ParameterContentError))),
+                                        CommandCode::InTransition => Err(Error::Busy),
+                                        _ => Err(Error::InvalidReturnData)
                                     };
                                     let _ = transaction.take_sender().send(reply);
                                 }
@@ -268,14 +269,14 @@ impl State {
                                 }
                                 TransactionState::PendingNotificationRegistration(_, _) => {
                                     let reply = match frame.ctype {
-                                        CommandCode::NotImplemented => Err(SessionError::NotImplemented),
-                                        CommandCode::Rejected => Err(SessionError::Rejected),
+                                        CommandCode::NotImplemented => Err(Error::NotImplemented),
+                                        CommandCode::Rejected => Err(Error::Rejected(parameters.read_be().unwrap_or(ErrorCode::ParameterContentError))),
                                         CommandCode::Interim => Ok(parameters),
                                         CommandCode::Changed => {
                                             warn!("Received changed response without interims response");
-                                            Err(SessionError::InvalidReturnData)
+                                            Err(Error::InvalidReturnData)
                                         }
-                                        _ => Err(SessionError::InvalidReturnData)
+                                        _ => Err(Error::InvalidReturnData)
                                     };
                                     let _ = transaction.take_sender().send(reply);
                                 }
@@ -327,13 +328,13 @@ impl State {
                 };
                 ensure!(
                     frame.ctype == CommandCode::Status,
-                    AvcError::NotImplemented,
+                    NotImplemented,
                     "Unsupported command type: {:?}",
                     frame.ctype
                 );
                 ensure!(
                     frame.subunit == UNIT_INFO,
-                    AvcError::NotImplemented,
+                    NotImplemented,
                     "Unsupported subunit: {:?}",
                     frame.subunit
                 );
@@ -354,18 +355,8 @@ impl State {
                     ty: SubunitType::Unit,
                     id: 7
                 };
-                ensure!(
-                    frame.ctype == CommandCode::Status,
-                    AvcError::NotImplemented,
-                    "Unsupported command type: {:?}",
-                    frame.ctype
-                );
-                ensure!(
-                    frame.subunit == UNIT_INFO,
-                    AvcError::NotImplemented,
-                    "Unsupported subunit: {:?}",
-                    frame.subunit
-                );
+                ensure!(frame.ctype == CommandCode::Status, NotImplemented,"Unsupported command type: {:?}",frame.ctype);
+                ensure!(frame.subunit == UNIT_INFO,NotImplemented,"Unsupported subunit: {:?}",frame.subunit);
                 let page: u8 = message.data.read_be()?;
                 self.send_avc(
                     message.transaction_label,
@@ -380,31 +371,23 @@ impl State {
                 Ok(())
             }
             Opcode::PassThrough => {
-                ensure!(
-                    frame.subunit == PANEL,
-                    AvcError::NotImplemented,
-                    "Unsupported subunit: {:?}",
-                    frame.subunit
-                );
+                ensure!(frame.subunit == PANEL,NotImplemented,"Unsupported subunit: {:?}",frame.subunit);
                 let transaction = &mut self.outstanding_transactions[message.transaction_label as usize];
                 if !matches!(transaction, TransactionState::PendingPassThrough(_)) {
-                    warn!(
-                        "Received pass-through response with no/wrong outstanding transaction: {:?} {:?}",
-                        message, transaction
-                    );
+                    warn!("Received pass-through response with no/wrong outstanding transaction: {:?} {:?}", message, transaction);
                     return Ok(());
                 }
                 let _ = transaction.take_sender().send(match frame.ctype {
                     CommandCode::Accepted => Ok(message.data),
-                    CommandCode::Rejected => Err(SessionError::Rejected),
-                    CommandCode::NotImplemented => Err(SessionError::NotImplemented),
-                    _ => Err(SessionError::InvalidReturnData)
+                    CommandCode::Rejected => Err(Error::Rejected(ErrorCode::NoError)),
+                    CommandCode::NotImplemented => Err(Error::NotImplemented),
+                    _ => Err(Error::InvalidReturnData)
                 });
                 Ok(())
             }
             code => {
                 warn!("Unsupported opcode: {:?}", code);
-                Err(AvcError::NotImplemented)
+                Err(NotImplemented)
             }
         }
     }
@@ -415,7 +398,7 @@ impl State {
                 .avctp
                 .send_msg(Message {
                     transaction_label,
-                    profile_id: REMOTE_CONTROL_SERVICE,
+                    profile_id: AV_REMOTE_CONTROL,
                     message_type: match cmd.is_response() {
                         true => MessageType::Response,
                         false => MessageType::Command
@@ -438,7 +421,7 @@ impl State {
         self.avctp
             .send_msg(Message {
                 transaction_label,
-                profile_id: REMOTE_CONTROL_SERVICE,
+                profile_id: AV_REMOTE_CONTROL,
                 message_type: match frame.ctype.is_response() {
                     true => MessageType::Response,
                     false => MessageType::Command
