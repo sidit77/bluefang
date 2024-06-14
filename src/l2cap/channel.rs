@@ -1,11 +1,14 @@
 use std::future::{poll_fn, Future};
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use bytes::{BufMut, Bytes, BytesMut};
+use futures_lite::FutureExt;
 use instructor::utils::Length;
 use instructor::{BufferMut, Instruct, LittleEndian};
 use tokio::sync::mpsc::UnboundedReceiver as MpscReceiver;
-use tracing::{debug, info_span, instrument, trace, warn, Span};
+use tokio::time::sleep;
+use tracing::{debug, info_span, instrument, trace, warn, Span, error};
 
 use crate::hci::{AclSendError, AclSender};
 use crate::l2cap::configuration::{ConfigurationParameter, FlushTimeout, Mtu};
@@ -36,6 +39,8 @@ pub enum Error {
     InvalidData(#[from] instructor::Error),
     #[error("This action is not allowed in the current channel state")]
     BadState,
+    #[error("The operation timed out")]
+    Timeout,
     #[error("The channel has been disconnected")]
     Disconnected,
     #[error("The underlying transport has been closed. Is the event loop still running?")]
@@ -53,7 +58,7 @@ impl From<AclSendError> for Error {
 
 impl IgnoreableError for Error {
     fn should_log(&self) -> bool {
-        matches!(self, Error::BadState)
+        !matches!(self, Error::Disconnected | Error::ChannelClosed)
     }
 }
 
@@ -120,26 +125,6 @@ impl Channel {
         self.remote_mtu.0
     }
 
-    pub fn read(&mut self) -> impl Future<Output = Option<Bytes>> + '_ {
-        poll_fn(move |cx| self.poll_data(cx))
-    }
-
-    #[instrument(parent = &self.span, skip(self, data))]
-    pub async fn write(&mut self, data: Bytes) -> Result<(), Error> {
-        if self.state != State::Open {
-            trace!("Channel not yet open, waiting for configuration");
-            self.wait_for_configuration_complete().await?;
-        }
-        let mut buffer = BytesMut::new();
-        buffer.write_le(L2capHeader {
-            len: Length::new(data.len())?,
-            cid: self.remote_cid
-        });
-        buffer.put(data);
-        self.sender.send(self.connection_handle, buffer.freeze())?;
-        Ok(())
-    }
-
     fn set_state(&mut self, state: State) -> Option<Event> {
         debug_assert_ne!(self.state, state, "State transition to same state");
         trace!("State transition: {:?} -> {:?}", self.state, state);
@@ -150,6 +135,28 @@ impl Channel {
             State::Config(ConfigState::Config) => Some(Event::ConnectionComplete),
             _ => None
         }
+    }
+
+    pub fn read(&mut self) -> impl Future<Output = Option<Bytes>> + '_ {
+        poll_fn(move |cx| self.poll_data(cx))
+    }
+
+    #[instrument(parent = &self.span, skip(self, data))]
+    pub async fn write(&mut self, data: Bytes) -> Result<(), Error> {
+        if self.state != State::Open {
+            trace!("Channel not yet open, waiting for configuration");
+            self.wait_for_configuration_complete()
+                .or(timeout(Duration::from_secs(2)))
+                .await?;
+        }
+        let mut buffer = BytesMut::new();
+        buffer.write_le(L2capHeader {
+            len: Length::new(data.len())?,
+            cid: self.remote_cid
+        });
+        buffer.put(data);
+        self.sender.send(self.connection_handle, buffer.freeze())?;
+        Ok(())
     }
 
     #[instrument(parent = &self.span, skip(self))]
@@ -163,7 +170,9 @@ impl Channel {
     pub async fn configure(&mut self) -> Result<(), Error> {
         match self.state {
             State::WaitConnect => {
-                self.wait_for_connection().await?;
+                self.wait_for_connection()
+                    .or(timeout(Duration::from_secs(1)))
+                    .await?;
                 assert_eq!(self.state, State::Config(ConfigState::Config));
                 self.set_state(State::Config(ConfigState::ConfigReqRsp))
             }
@@ -279,7 +288,7 @@ impl Channel {
         while let Poll::Ready(event) = self.poll_events(cx) {
             match event {
                 Ok(Event::DataReceived(data)) => return Poll::Ready(Some(data)),
-                Ok(Event::DisconnectComplete) | Err(Error::Disconnected | Error::ChannelClosed) => return Poll::Ready(None),
+                Ok(Event::DisconnectComplete) | Err(Error::Disconnected | Error::ChannelClosed | Error::Timeout) => return Poll::Ready(None),
                 Ok(Event::ConnectionComplete | Event::ConfigurationCompete) => {}
                 Err(e) => panic!("{}", e)
             }
@@ -316,7 +325,7 @@ impl Channel {
                 for option in options {
                     match option {
                         ConfigurationParameter::Mtu(mtu) => self.local_mtu = mtu,
-                        _ => unreachable!()
+                        _ => warn!("Unexpected configuration parameter: {:?}", option)
                     }
                 }
                 Ok(self.set_state(success))
@@ -419,4 +428,9 @@ impl Drop for Channel {
             }
         }
     }
+}
+
+async fn timeout(duration: Duration) -> Result<(), Error> {
+    sleep(duration).await;
+    Err(Error::Timeout)
 }
