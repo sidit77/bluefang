@@ -13,11 +13,10 @@ use parking_lot::Mutex;
 use tokio::runtime::Handle;
 use tokio::sync::oneshot::{Receiver, Sender};
 use tokio::{select, spawn};
-use tracing::{debug, trace, warn};
+use tracing::{debug, trace, warn, error};
 
 use crate::avdtp::capabilities::Capability;
 use crate::avdtp::endpoint::Stream;
-use crate::avdtp::error::Error;
 use crate::avdtp::packets::{MessageType, ServiceCategory, SignalChannelExt, SignalIdentifier, SignalMessage, SignalMessageAssembler};
 use crate::ensure;
 use crate::l2cap::channel::{Channel, Error as L2capError};
@@ -26,6 +25,7 @@ use crate::utils::{select_all, MutexCell, OptionFuture};
 
 pub use endpoint::{LocalEndpoint, StreamHandler, StreamHandlerFactory};
 pub use packets::{MediaType, StreamEndpointType};
+use crate::avdtp::error::Error;
 
 #[derive(Default)]
 pub struct AvdtpBuilder {
@@ -97,23 +97,28 @@ impl ProtocolHandler for Avdtp {
                         pending_streams.lock().remove(&handle);
                     })
                 });
+                true
             }
-            Some(pending) => {
-                trace!("Existing AVDTP session (transport channel)");
-                spawn(async move {
-                    if let Err(err) = channel.configure().await {
-                        warn!("Error configuring channel: {:?}", err);
-                        return;
-                    }
-                    pending
-                        .take()
-                        .expect("Unexpected AVDTP transport connection")
-                        .send(channel)
-                        .unwrap_or_else(|_| panic!("Failed to send channel to session"));
-                });
+            Some(pending) => match pending.take() {
+                Some(sender) => {
+                    trace!("Existing AVDTP session (transport channel)");
+                    spawn(async move {
+                        if let Err(err) = channel.configure().await {
+                            warn!("Error configuring channel: {:?}", err);
+                            return;
+                        }
+                        sender
+                            .send(channel)
+                            .unwrap_or_else(|_| error!("Failed to send channel to session"));
+                    });
+                    true
+                }
+                None => {
+                    warn!("Unexpected transport channel connection attempt");
+                    false
+                }
             }
         }
-        true
     }
 }
 
