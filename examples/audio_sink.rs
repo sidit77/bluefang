@@ -10,9 +10,7 @@ use anyhow::Context;
 use bluefang::a2dp::sbc::SbcMediaCodecInformation;
 use bluefang::a2dp::sdp::A2dpSinkServiceRecord;
 use bluefang::avdtp::capabilities::{Capability, MediaCodecCapability};
-use bluefang::avdtp::error::ErrorCode;
-use bluefang::avdtp::packets::{MediaType, StreamEndpointType};
-use bluefang::avdtp::{AvdtpBuilder, LocalEndpoint, StreamHandler};
+use bluefang::avdtp::{AvdtpBuilder, LocalEndpoint, StreamHandler, StreamHandlerFactory, MediaType, StreamEndpointType};
 use bluefang::avrcp::notifications::CurrentTrack;
 use bluefang::avrcp::sdp::{AvrcpControllerServiceRecord, AvrcpTargetServiceRecord};
 use bluefang::avrcp::{Avrcp, AvrcpSession, Event, MediaAttributeId, Notification};
@@ -106,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
                             Capability::MediaCodec(SbcMediaCodecInformation::default().into()),
                         ],
                         //stream_handler_factory: Box::new(|cap| Box::new(FileDumpHandler::new())),
-                        stream_handler_factory: Box::new(cloned!([volume] move |cap| Box::new(SbcStreamHandler::new(volume.clone(), cap))))
+                        factory: StreamHandlerFactory::new(cloned!([volume] move |cap| SbcStreamHandler::new(volume.clone(), cap)))
                     })
                     .build()
             )
@@ -216,7 +214,7 @@ struct SbcStreamHandler {
 impl SbcStreamHandler {
     pub fn new(volume: Arc<AtomicF32>, capabilities: &[Capability]) -> Self {
         let (source_frequency, input_size) = Self::parse_capabilities(capabilities)
-            .ok_or(ErrorCode::BadMediaTransportFormat)
+            .context("Invalid capabilities")
             .unwrap();
 
         let audio_session = AudioSession::new().unwrap();

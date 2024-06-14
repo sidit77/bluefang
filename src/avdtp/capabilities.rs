@@ -2,7 +2,9 @@ use instructor::utils::Limit;
 use instructor::{BigEndian, Buffer, BufferMut, ByteSize, Error, Exstruct, Instruct};
 
 use crate::a2dp::sbc::SbcMediaCodecInformation;
-use crate::avdtp::packets::{AudioCodec, MediaType, ServiceCategory, VideoCodec};
+use crate::avdtp::MediaType;
+
+pub use super::packets::{AudioCodec, VideoCodec, ServiceCategory};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Capability {

@@ -2,24 +2,48 @@ use std::future::{poll_fn, Future};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::fmt::Debug;
 
 use bytes::Bytes;
 use tracing::warn;
 
 use crate::avdtp::capabilities::Capability;
-use crate::avdtp::error::ErrorCode;
+use crate::avdtp::error::Error;
 use crate::avdtp::packets::{MediaType, StreamEndpoint, StreamEndpointType};
 use crate::ensure;
 use crate::l2cap::channel::Channel;
-pub type StreamHandlerFactory = Box<dyn Fn(&[Capability]) -> Box<dyn StreamHandler> + Send + Sync + 'static>;
 
+
+pub struct StreamHandlerFactory(Box<dyn Fn(&[Capability]) -> Box<dyn StreamHandler> + Send + Sync>);
+
+impl StreamHandlerFactory {
+    pub fn new<F, H>(factory: F) -> Self
+        where
+            F: Fn(&[Capability]) -> H + Send + Sync + 'static,
+            H: StreamHandler
+    {
+        Self(Box::new(move |cap| Box::new(factory(cap))))
+    }
+
+    fn make_stream_handler(&self, capabilities: &[Capability]) -> Box<dyn StreamHandler> {
+        (self.0)(capabilities)
+    }
+}
+
+impl Debug for StreamHandlerFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "StreamHandlerFactory(...)")
+    }
+}
+
+#[derive(Debug)]
 pub struct LocalEndpoint {
     pub media_type: MediaType,
     pub seid: u8,
     pub in_use: Arc<AtomicBool>,
     pub tsep: StreamEndpointType,
     pub capabilities: Vec<Capability>,
-    pub stream_handler_factory: StreamHandlerFactory
+    pub factory: StreamHandlerFactory
 }
 
 impl LocalEndpoint {
@@ -53,9 +77,9 @@ pub struct Stream {
 }
 
 impl Stream {
-    pub fn new(local_endpoint: &LocalEndpoint, remote_endpoint: u8, capabilities: Vec<Capability>) -> Result<Self, ErrorCode> {
-        ensure!(!local_endpoint.in_use.swap(true, Ordering::SeqCst), ErrorCode::SepInUse);
-        let handler = (local_endpoint.stream_handler_factory)(&capabilities);
+    pub fn new(local_endpoint: &LocalEndpoint, remote_endpoint: u8, capabilities: Vec<Capability>) -> Result<Self, Error> {
+        ensure!(!local_endpoint.in_use.swap(true, Ordering::SeqCst), Error::SepInUse);
+        let handler = local_endpoint.factory.make_stream_handler(&capabilities);
         Ok(Self {
             local_endpoint: local_endpoint.seid,
             remote_endpoint,
@@ -67,37 +91,37 @@ impl Stream {
         })
     }
 
-    pub fn reconfigure(&mut self, capabilities: Vec<Capability>, ep: &LocalEndpoint) -> Result<(), ErrorCode> {
+    pub fn reconfigure(&mut self, capabilities: Vec<Capability>, ep: &LocalEndpoint) -> Result<(), Error> {
         assert_eq!(self.local_endpoint, ep.seid);
-        ensure!(matches!(self.state, StreamState::Open), ErrorCode::BadState);
-        self.handler = (ep.stream_handler_factory)(&capabilities);
+        ensure!(matches!(self.state, StreamState::Open), Error::BadState);
+        self.handler = ep.factory.make_stream_handler(&capabilities);
         self.capabilities = capabilities;
         Ok(())
     }
 
-    pub fn set_to_opening(&mut self) -> Result<(), ErrorCode> {
-        ensure!(matches!(self.state, StreamState::Configured), ErrorCode::BadState);
-        ensure!(self.channel.is_none(), ErrorCode::BadState);
+    pub fn set_to_opening(&mut self) -> Result<(), Error> {
+        ensure!(matches!(self.state, StreamState::Configured), Error::BadState);
+        ensure!(self.channel.is_none(), Error::BadState);
         self.state = StreamState::Opening;
         Ok(())
     }
 
-    pub fn start(&mut self) -> Result<(), ErrorCode> {
-        ensure!(matches!(self.state, StreamState::Open), ErrorCode::BadState);
+    pub fn start(&mut self) -> Result<(), Error> {
+        ensure!(matches!(self.state, StreamState::Open), Error::BadState);
         self.handler.on_play();
         self.state = StreamState::Streaming;
         Ok(())
     }
 
-    pub fn stop(&mut self) -> Result<(), ErrorCode> {
-        ensure!(matches!(self.state, StreamState::Streaming), ErrorCode::BadState);
+    pub fn stop(&mut self) -> Result<(), Error> {
+        ensure!(matches!(self.state, StreamState::Streaming), Error::BadState);
         self.handler.on_stop();
         self.state = StreamState::Open;
         Ok(())
     }
 
-    pub fn close(&mut self) -> Result<(), ErrorCode> {
-        ensure!(matches!(self.state, StreamState::Streaming | StreamState::Open), ErrorCode::BadState);
+    pub fn close(&mut self) -> Result<(), Error> {
+        ensure!(matches!(self.state, StreamState::Streaming | StreamState::Open), Error::BadState);
         if self.state == StreamState::Streaming {
             self.handler.on_stop();
         }
@@ -117,8 +141,8 @@ impl Stream {
         self.state = StreamState::Open;
     }
 
-    pub fn get_capabilities(&self) -> Result<&Vec<Capability>, ErrorCode> {
-        ensure!(self.state != StreamState::Closing, ErrorCode::BadState);
+    pub fn get_capabilities(&self) -> Result<&Vec<Capability>, Error> {
+        ensure!(self.state != StreamState::Closing, Error::BadState);
         Ok(&self.capabilities)
     }
 

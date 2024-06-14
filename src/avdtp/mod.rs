@@ -1,14 +1,13 @@
 pub mod capabilities;
-pub mod endpoint;
-pub mod error;
-pub mod packets;
+mod endpoint;
+mod error;
+mod packets;
 pub mod utils;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use bytes::{Bytes, BytesMut};
-pub use endpoint::{LocalEndpoint, StreamHandler};
 use instructor::{BigEndian, Buffer, BufferMut, Instruct};
 use parking_lot::Mutex;
 use tokio::runtime::Handle;
@@ -18,12 +17,15 @@ use tracing::{debug, trace, warn};
 
 use crate::avdtp::capabilities::Capability;
 use crate::avdtp::endpoint::Stream;
-use crate::avdtp::error::ErrorCode;
+use crate::avdtp::error::Error;
 use crate::avdtp::packets::{MessageType, ServiceCategory, SignalChannelExt, SignalIdentifier, SignalMessage, SignalMessageAssembler};
 use crate::ensure;
-use crate::l2cap::channel::{Channel, Error};
+use crate::l2cap::channel::{Channel, Error as L2capError};
 use crate::l2cap::{ProtocolHandler, AVDTP_PSM};
 use crate::utils::{select_all, MutexCell, OptionFuture};
+
+pub use endpoint::{LocalEndpoint, StreamHandler, StreamHandlerFactory};
+pub use packets::{MediaType, StreamEndpointType};
 
 #[derive(Default)]
 pub struct AvdtpBuilder {
@@ -123,7 +125,7 @@ struct AvdtpSession {
 }
 
 impl AvdtpSession {
-    async fn handle_control_channel(&mut self, mut channel: Channel) -> Result<(), Error> {
+    async fn handle_control_channel(&mut self, mut channel: Channel) -> Result<(), L2capError> {
         let mut assembler = SignalMessageAssembler::default();
         loop {
             select! {
@@ -158,14 +160,14 @@ impl AvdtpSession {
         Ok(())
     }
 
-    fn get_endpoint(&self, seid: u8) -> Result<&LocalEndpoint, ErrorCode> {
+    fn get_endpoint(&self, seid: u8) -> Result<&LocalEndpoint, Error> {
         self.local_endpoints
             .iter()
             .find(|ep| ep.seid == seid)
-            .ok_or(ErrorCode::BadAcpSeid)
+            .ok_or(Error::BadAcpSeid)
     }
 
-    fn get_stream(&mut self, seid: u8) -> Result<&mut Stream, ErrorCode> {
+    fn get_stream(&mut self, seid: u8) -> Result<&mut Stream, Error> {
         #[allow(clippy::obfuscated_if_else)]
         self.streams
             .iter_mut()
@@ -174,8 +176,8 @@ impl AvdtpSession {
                 self.local_endpoints
                     .iter()
                     .any(|ep| ep.seid == seid)
-                    .then_some(ErrorCode::BadState)
-                    .unwrap_or(ErrorCode::BadAcpSeid)
+                    .then_some(Error::BadState)
+                    .unwrap_or(Error::BadAcpSeid)
             })
     }
 
@@ -226,7 +228,7 @@ impl AvdtpSession {
                     self.streams
                         .iter()
                         .all(|stream| stream.local_endpoint != acp_seid),
-                    ErrorCode::BadState
+                    Error::BadState
                 );
                 self.streams.push(Stream::new(ep, int_seid, capabilities)?);
                 Ok(())
@@ -250,12 +252,12 @@ impl AvdtpSession {
                     .local_endpoints
                     .iter()
                     .find(|ep| ep.seid == acp_seid)
-                    .ok_or(ErrorCode::BadAcpSeid)?;
+                    .ok_or(Error::BadAcpSeid)?;
                 let stream = self
                     .streams
                     .iter_mut()
                     .find(|stream| stream.local_endpoint == acp_seid)
-                    .ok_or(ErrorCode::BadState)?;
+                    .ok_or(Error::BadState)?;
                 stream.reconfigure(capabilities, ep)?;
                 Ok(())
             }),
@@ -354,12 +356,12 @@ impl SignalMessageResponse {
     }
 
     pub fn unsupported(&self) -> SignalMessage {
-        self.try_accept((), |_, _| Err(ErrorCode::NotSupportedCommand))
+        self.try_accept((), |_, _| Err(Error::NotSupportedCommand))
     }
 
     pub fn try_accept<F, C>(&self, err_ctx: C, f: F) -> SignalMessage
     where
-        F: FnOnce(&mut BytesMut, &mut C) -> Result<(), ErrorCode>,
+        F: FnOnce(&mut BytesMut, &mut C) -> Result<(), Error>,
         C: Instruct<BigEndian>
     {
         let mut buf = BytesMut::new();

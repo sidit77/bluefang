@@ -4,7 +4,7 @@ use thiserror::Error;
 // [AVDTP] Section 8.20.6.2.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Exstruct, Instruct, Error)]
 #[repr(u8)]
-pub enum ErrorCode {
+pub enum Error {
     /// Caused by commands: All messages
     #[error("Bad header format")]
     BadHeaderFormat = 0x01,
@@ -77,13 +77,13 @@ pub enum ErrorCode {
     BadState = 0x31
 }
 
-impl From<InstructorError> for ErrorCode {
+impl From<InstructorError> for Error {
     fn from(value: InstructorError) -> Self {
         match value {
-            InstructorError::TooShort => ErrorCode::BadLength,
-            InstructorError::TooLong => ErrorCode::BadLength,
-            InstructorError::InvalidValue => ErrorCode::BadHeaderFormat,
-            InstructorError::UnexpectedLength => ErrorCode::BadLength
+            InstructorError::TooShort => Error::BadLength,
+            InstructorError::TooLong => Error::BadLength,
+            InstructorError::InvalidValue => Error::BadHeaderFormat,
+            InstructorError::UnexpectedLength => Error::BadLength
         }
     }
 }
