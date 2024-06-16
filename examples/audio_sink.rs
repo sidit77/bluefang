@@ -16,7 +16,7 @@ use bluefang::avrcp::sdp::{AvrcpControllerServiceRecord, AvrcpTargetServiceRecor
 use bluefang::avrcp::{Avrcp, AvrcpSession, Event, MediaAttributeId, Notification};
 use bluefang::firmware::RealTekFirmwareLoader;
 use bluefang::hci::connection::ConnectionManagerBuilder;
-use bluefang::hci::consts::{ClassOfDevice, MajorDeviceClass, MajorServiceClasses};
+use bluefang::hci::consts::{AudioVideoClass, ClassOfDevice, DeviceClass, MajorServiceClasses};
 use bluefang::hci::Hci;
 use bluefang::host::usb::UsbController;
 use bluefang::l2cap::L2capServerBuilder;
@@ -67,9 +67,8 @@ async fn main() -> anyhow::Result<()> {
         .claim()?;
 
     let cod = ClassOfDevice {
-        major_service_classes: MajorServiceClasses::Audio | MajorServiceClasses::Rendering,
-        major_device_classes: MajorDeviceClass::AudioVideo,
-        minor_device_classes: 4
+        service_classes: MajorServiceClasses::Audio | MajorServiceClasses::Rendering,
+        device_class: DeviceClass::AudioVideo(AudioVideoClass::WearableHeadset),
     };
     //let cod = ClassOfDevice::from(2360324);
 

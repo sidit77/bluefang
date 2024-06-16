@@ -253,9 +253,9 @@ pub trait FirmwareLoader {
     fn try_load_firmware<'a>(&'a self, hci: &'a Hci) -> Pin<Box<dyn Future<Output = Result<bool, Error>> + Send + 'a>>;
 }
 
-static FIRMWARE_LOADERS: tokio::sync::Mutex<Vec<Box<dyn FirmwareLoader + Send>>> = tokio::sync::Mutex::const_new(Vec::new());
+static FIRMWARE_LOADERS: tokio::sync::Mutex<Vec<Box<dyn FirmwareLoader + Send + Sync>>> = tokio::sync::Mutex::const_new(Vec::new());
 impl Hci {
-    pub fn register_firmware_loader<FL: FirmwareLoader + Send + 'static>(loader: FL) {
+    pub fn register_firmware_loader<FL: FirmwareLoader + Send + Sync + 'static>(loader: FL) {
         FIRMWARE_LOADERS.blocking_lock().push(Box::new(loader));
     }
 
