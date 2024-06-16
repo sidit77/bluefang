@@ -8,6 +8,7 @@ pub mod connection;
 mod event_loop;
 
 use std::collections::BTreeSet;
+use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
@@ -38,7 +39,8 @@ pub struct Hci {
     acl_out: MpscSender<Bytes>,
     ctl_out: MpscSender<EventLoopCommand>,
     acl_size: usize,
-    event_loop: Mutex<Option<JoinHandle<()>>>
+    event_loop: Mutex<Option<JoinHandle<()>>>,
+    version: LocalVersion
 }
 
 impl Hci {
@@ -52,7 +54,8 @@ impl Hci {
             acl_out,
             ctl_out,
             acl_size: 0,
-            event_loop: Mutex::new(Some(event_loop))
+            event_loop: Mutex::new(Some(event_loop)),
+            version: Default::default(),
         };
 
         // Reset after allowing the event loop to discard any unexpected events
@@ -62,9 +65,10 @@ impl Hci {
 
         Self::try_load_firmware(&hci).await;
 
-        debug!("HCI version: {:?}", hci.read_local_version().await?);
+        hci.version = hci.read_local_version().await?;
+        debug!("HCI version: {:?}", hci.version);
 
-        debug!("{:?}", hci.read_local_supported_commands().await?);
+        //debug!("{:?}", hci.read_local_supported_commands().await?);
 
         hci.set_event_mask(EventMask::all()).await?;
 
@@ -143,6 +147,15 @@ impl Hci {
             error!("Another thread already called shutdown");
         }
         Ok(())
+    }
+}
+
+impl Debug for Hci {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Hci")
+            .field("company", &self.version.company_id)
+            .field("version", &self.version.hci_version)
+            .finish()
     }
 }
 

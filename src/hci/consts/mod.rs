@@ -1,12 +1,15 @@
 mod class_of_device;
 mod events;
+mod company_id;
 
 use std::fmt::{Debug, Display, Formatter};
+use instructor::utils::u24;
+use instructor::{BufferMut, Endian, Exstruct, Instruct};
 
 pub use class_of_device::*;
 pub use events::*;
-use instructor::utils::u24;
-use instructor::{BufferMut, Endian, Exstruct, Instruct};
+pub use company_id::CompanyId;
+
 
 /// Bluetooth Core Specification versions ([Assigned Numbers] Section 2.1).
 #[derive(Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd, Exstruct)]
@@ -52,11 +55,6 @@ impl Debug for CoreVersion {
         })
     }
 }
-
-/// Company identifier ([Assigned Numbers] Section 7.1).
-#[derive(Debug, Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd, Exstruct)]
-#[repr(transparent)]
-pub struct CompanyId(pub u16);
 
 /// LAPs ([Assigned Numbers] Section 2.2).
 /// Range 0x9E8B00 to 0x9E8B3F
