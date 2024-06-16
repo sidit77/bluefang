@@ -17,7 +17,7 @@ use bluefang::avrcp::{Avrcp, AvrcpSession, Event, MediaAttributeId, Notification
 use bluefang::firmware::RealTekFirmwareLoader;
 use bluefang::hci::connection::ConnectionManagerBuilder;
 use bluefang::hci::consts::{AudioVideoClass, ClassOfDevice, DeviceClass, MajorServiceClasses};
-use bluefang::hci::Hci;
+use bluefang::hci::{FirmwareLoader, Hci};
 use bluefang::host::usb::UsbController;
 use bluefang::l2cap::L2capServerBuilder;
 use bluefang::sdp::SdpBuilder;
@@ -59,7 +59,9 @@ async fn main() -> anyhow::Result<()> {
         .with(EnvFilter::from_default_env())
         .init();
 
-    Hci::register_firmware_loader(RealTekFirmwareLoader::new("./firmware"));
+    Hci::register_firmware_loaders([
+        RealTekFirmwareLoader::new("./firmware").boxed()
+    ]);
 
     let usb = UsbController::list(|info| info.vendor_id() == 0x2B89 || info.vendor_id() == 0x10D7)?
         .next()

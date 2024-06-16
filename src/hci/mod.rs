@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use bytes::{BufMut, Bytes, BytesMut};
@@ -249,22 +250,29 @@ impl From<&'static str> for Error {
     }
 }
 
-pub trait FirmwareLoader {
+pub trait FirmwareLoader: Send + Sync {
     fn try_load_firmware<'a>(&'a self, hci: &'a Hci) -> Pin<Box<dyn Future<Output = Result<bool, Error>> + Send + 'a>>;
+
+    fn boxed(self) -> Box<dyn FirmwareLoader> where Self: 'static + Sized {
+        Box::new(self)
+    }
 }
 
-static FIRMWARE_LOADERS: tokio::sync::Mutex<Vec<Box<dyn FirmwareLoader + Send + Sync>>> = tokio::sync::Mutex::const_new(Vec::new());
+static FIRMWARE_LOADERS: OnceLock<Vec<Box<dyn FirmwareLoader>>> = OnceLock::new();
 impl Hci {
-    pub fn register_firmware_loader<FL: FirmwareLoader + Send + Sync + 'static>(loader: FL) {
-        FIRMWARE_LOADERS.blocking_lock().push(Box::new(loader));
+    pub fn register_firmware_loaders<I: IntoIterator<Item=Box<dyn FirmwareLoader>>>(loaders: I) {
+        FIRMWARE_LOADERS.set(loaders.into_iter().collect())
+            .unwrap_or_else(|_| panic!("Firmware loaders already registered"));
     }
 
     async fn try_load_firmware(&self) {
-        for loader in &*FIRMWARE_LOADERS.lock().await {
-            match loader.try_load_firmware(self).await {
-                Ok(true) => break,
-                Ok(false) => continue,
-                Err(err) => error!("Failed to load firmware: {:?}", err)
+        if let Some(loaders) = FIRMWARE_LOADERS.get() {
+            for loader in loaders {
+                match loader.try_load_firmware(self).await {
+                    Ok(true) => break,
+                    Ok(false) => continue,
+                    Err(err) => error!("Failed to load firmware: {:?}", err)
+                }
             }
         }
     }
