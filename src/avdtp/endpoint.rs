@@ -70,6 +70,7 @@ pub struct Stream {
     state: StreamState,
     endpoint_usage_lock: Arc<AtomicBool>,
     pub local_endpoint: u8,
+    #[allow(dead_code)]
     pub remote_endpoint: u8,
     capabilities: Vec<Capability>,
     channel: Option<Channel>,

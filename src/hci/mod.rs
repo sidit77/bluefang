@@ -242,8 +242,8 @@ pub trait FirmwareLoader {
 
 static FIRMWARE_LOADERS: tokio::sync::Mutex<Vec<Box<dyn FirmwareLoader + Send>>> = tokio::sync::Mutex::const_new(Vec::new());
 impl Hci {
-    pub async fn register_firmware_loader<FL: FirmwareLoader + Send + 'static>(loader: FL) {
-        FIRMWARE_LOADERS.lock().await.push(Box::new(loader));
+    pub fn register_firmware_loader<FL: FirmwareLoader + Send + 'static>(loader: FL) {
+        FIRMWARE_LOADERS.blocking_lock().push(Box::new(loader));
     }
 
     async fn try_load_firmware(&self) {

@@ -236,6 +236,7 @@ impl State {
 #[derive(Debug, Clone, Exstruct)]
 pub struct EventHeader {
     pub code: EventCode,
+    #[allow(dead_code)]
     pub length: Length<u8, 0>
 }
 

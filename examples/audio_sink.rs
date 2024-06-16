@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
         .with(EnvFilter::from_default_env())
         .init();
 
-    Hci::register_firmware_loader(RealTekFirmwareLoader::new("./firmware")).await;
+    Hci::register_firmware_loader(RealTekFirmwareLoader::new("./firmware"));
 
     let usb = UsbController::list(|info| info.vendor_id() == 0x2B89 || info.vendor_id() == 0x10D7)?
         .next()
