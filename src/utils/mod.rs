@@ -102,6 +102,12 @@ pub trait IgnoreableError {
     fn should_log(&self) -> bool;
 }
 
+impl<T> IgnoreableError for tokio::sync::mpsc::error::TrySendError<T> {
+    fn should_log(&self) -> bool {
+        matches!(self, tokio::sync::mpsc::error::TrySendError::Full(_))
+    }
+}
+
 pub trait ResultExt<E> {
     fn ignore(self);
 }

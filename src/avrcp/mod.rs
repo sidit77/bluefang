@@ -189,8 +189,8 @@ impl State {
                                 .await
                                 .then(|| self.outstanding_transactions[transaction] = TransactionState::PendingVendorDependent(cmd, sender));
                         }
-                        AvrcpCommand::RegisterNotification(event, parser, sender) => {
-                            self.send_avrcp(transaction as u8, CommandCode::Notify, Pdu::RegisterNotification, (event, 0u32))
+                        AvrcpCommand::RegisterNotification(event, interval, parser, sender) => {
+                            self.send_avrcp(transaction as u8, CommandCode::Notify, Pdu::RegisterNotification, (event, interval))
                                 .await
                                 .then(|| {
                                     self.outstanding_transactions[transaction] = TransactionState::PendingNotificationRegistration(parser, sender)

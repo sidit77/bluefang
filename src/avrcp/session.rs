@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 use std::future::Future;
+use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
 use instructor::{BigEndian, Buffer, BufferMut, Exstruct};
@@ -8,7 +10,6 @@ use tokio::sync::oneshot::Sender as OneshotSender;
 
 use crate::avc::{CommandCode, PassThroughFrame, PassThroughOp, PassThroughState};
 use crate::avrcp::error::Error;
-use crate::avrcp::notifications::CurrentTrack;
 use crate::avrcp::packets::{EventId, MediaAttributeId, Pdu, EVENTS_SUPPORTED_CAPABILITY};
 use crate::ensure;
 use crate::utils::FromStruct;
@@ -18,7 +19,7 @@ pub type CommandResponseSender = OneshotSender<Result<Bytes, Error>>;
 pub enum AvrcpCommand {
     PassThrough(PassThroughOp, PassThroughState, CommandResponseSender),
     VendorSpecific(CommandCode, Pdu, Bytes, CommandResponseSender),
-    RegisterNotification(EventId, EventParser, CommandResponseSender),
+    RegisterNotification(EventId, u32, EventParser, CommandResponseSender),
     UpdatedVolume(f32)
 }
 
@@ -27,7 +28,7 @@ impl AvrcpCommand {
         match self {
             AvrcpCommand::PassThrough(_, _, tx) => Some(tx),
             AvrcpCommand::VendorSpecific(_, _, _, tx) => Some(tx),
-            AvrcpCommand::RegisterNotification(_, _, tx) => Some(tx),
+            AvrcpCommand::RegisterNotification(_, _, _, tx) => Some(tx),
             _ => None
         }
     }
@@ -36,6 +37,12 @@ impl AvrcpCommand {
 pub struct AvrcpSession {
     pub(super) commands: Sender<AvrcpCommand>,
     pub(super) events: Receiver<Event>
+}
+
+impl Debug for AvrcpSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AvrcpSession").finish()
+    }
 }
 
 impl AvrcpSession {
@@ -71,18 +78,10 @@ impl AvrcpSession {
             .map_err(|_| Error::SessionClosed)
     }
 
-    pub async fn play(&self) -> Result<(), Error> {
-        self.send_action(PassThroughOp::Play, PassThroughState::Pressed)
+    pub async fn action(&self, op: PassThroughOp) -> Result<(), Error> {
+        self.send_action(op, PassThroughState::Pressed)
             .await?;
-        self.send_action(PassThroughOp::Play, PassThroughState::Released)
-            .await?;
-        Ok(())
-    }
-
-    pub async fn pause(&self) -> Result<(), Error> {
-        self.send_action(PassThroughOp::Pause, PassThroughState::Pressed)
-            .await?;
-        self.send_action(PassThroughOp::Pause, PassThroughState::Released)
+        self.send_action(op, PassThroughState::Released)
             .await?;
         Ok(())
     }
@@ -104,10 +103,12 @@ impl AvrcpSession {
         Ok(events)
     }
 
-    pub async fn register_notification<N: Notification>(&self) -> Result<N, Error> {
+    pub async fn register_notification<N: Notification>(&self, playback_interval: Option<Duration>) -> Result<N, Error> {
+        assert!(N::EVENT_ID != EventId::PlaybackPosChanged || playback_interval.is_some(), "PlaybackPosChanged requires an interval");
         let (tx, rx) = tokio::sync::oneshot::channel();
+        let int = playback_interval.map_or(0, |interval| interval.as_secs() as u32);
         self.commands
-            .send(AvrcpCommand::RegisterNotification(N::EVENT_ID, N::read, tx))
+            .send(AvrcpCommand::RegisterNotification(N::EVENT_ID, int, N::read, tx))
             .await
             .map_err(|_| Error::SessionClosed)?;
         let mut result = rx.await.map_err(|_| Error::SessionClosed)??;
@@ -163,11 +164,14 @@ pub trait Notification: Exstruct<BigEndian> + Into<Event> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
-    TrackChanged(CurrentTrack),
+    TrackChanged(notifications::CurrentTrack),
+    PlaybackStatusChanged(notifications::PlaybackStatus),
+    PlaybackPositionChanged(notifications::PlaybackPosition),
     VolumeChanged(f32)
 }
 
 pub mod notifications {
+    use std::time::Duration;
     use instructor::{BigEndian, Buffer, Error, Exstruct};
 
     use crate::avrcp::packets::EventId;
@@ -201,5 +205,55 @@ pub mod notifications {
 
     impl Notification for CurrentTrack {
         const EVENT_ID: EventId = EventId::TrackChanged;
+    }
+
+    #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Exstruct)]
+    #[repr(u8)]
+    pub enum PlaybackStatus {
+        #[default]
+        Stopped = 0x00,
+        Playing = 0x01,
+        Paused = 0x02,
+        FwdSeek = 0x03,
+        RevSeek = 0x04,
+        #[instructor(default)]
+        Error = 0xFF
+    }
+
+    impl From<PlaybackStatus> for Event {
+        fn from(value: PlaybackStatus) -> Self {
+            Event::PlaybackStatusChanged(value)
+        }
+    }
+
+    impl Notification for PlaybackStatus {
+        const EVENT_ID: EventId = EventId::PlaybackStatusChanged;
+    }
+
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
+    pub enum PlaybackPosition {
+        #[default]
+        NotSelected,
+        Position(Duration)
+    }
+
+    impl Exstruct<BigEndian> for PlaybackPosition {
+        fn read_from_buffer<B: Buffer>(buffer: &mut B) -> Result<Self, Error> {
+            let pos: u32 = buffer.read_be()?;
+            Ok(match pos {
+                u32::MAX => Self::NotSelected,
+                i => Self::Position(Duration::from_millis(i as u64))
+            })
+        }
+    }
+
+    impl From<PlaybackPosition> for Event {
+        fn from(event: PlaybackPosition) -> Self {
+            Self::PlaybackPositionChanged(event)
+        }
+    }
+
+    impl Notification for PlaybackPosition {
+        const EVENT_ID: EventId = EventId::PlaybackPosChanged;
     }
 }

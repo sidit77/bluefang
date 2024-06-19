@@ -42,6 +42,7 @@ use tracing_subscriber::fmt::layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
+use bluefang::avc::PassThroughOp;
 
 macro_rules! cloned {
     ([$($vars:ident),+] $e:expr) => {
@@ -147,11 +148,11 @@ fn avrcp_session_handler(volume: Arc<AtomicF32>, mut session: AvrcpSession) {
                 Some(Either2::A(command)) => match command {
                     PlayerCommand::Play => {
                         println!("Play");
-                        session.play().await
+                        session.action(PassThroughOp::Play).await
                     },
                     PlayerCommand::Pause => {
                         println!("Pause");
-                        session.pause().await
+                        session.action(PassThroughOp::Pause).await
                     },
                     PlayerCommand::VolumeUp | PlayerCommand::VolumeDown => {
                         let d = if command == PlayerCommand::VolumeUp { 0.1 } else { -0.1 };
@@ -172,7 +173,8 @@ fn avrcp_session_handler(volume: Arc<AtomicF32>, mut session: AvrcpSession) {
                     Event::VolumeChanged(vol) => {
                         volume.store(vol, SeqCst);
                         println!("Volume: {}%", (volume.load(SeqCst) * 100.0).round());
-                    }
+                    },
+                    _ => {}
                 },
                 None => break
             }
@@ -181,7 +183,7 @@ fn avrcp_session_handler(volume: Arc<AtomicF32>, mut session: AvrcpSession) {
 }
 
 async fn retrieve_current_track_info(session: &AvrcpSession) -> anyhow::Result<()> {
-    let current_track: CurrentTrack = session.register_notification().await?;
+    let current_track: CurrentTrack = session.register_notification(None).await?;
     match current_track {
         CurrentTrack::NotSelected => println!("No track selected"),
         CurrentTrack::Selected => {
