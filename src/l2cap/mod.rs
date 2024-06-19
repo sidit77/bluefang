@@ -3,17 +3,18 @@ pub mod configuration;
 pub mod signaling;
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::ops::Range;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use instructor::utils::Length;
 use instructor::{Buffer, Exstruct, Instruct};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver as MpscReceiver, UnboundedSender as MpscSender};
-use tokio::task::JoinHandle;
-use tokio::{select, spawn};
-use tracing::{debug, trace, warn};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver as MpscReceiver, UnboundedReceiver, UnboundedSender as MpscSender};
+use tracing::{debug, warn};
 
 use crate::ensure;
 use crate::hci::acl::{AclDataAssembler, AclHeader};
@@ -43,13 +44,13 @@ impl L2capServerBuilder {
         self
     }
 
-    pub fn spawn(self, hci: Arc<Hci>) -> Result<JoinHandle<()>, Error> {
-        let mut data = {
+    pub fn run(self, hci: &Hci) -> Result<L2capServer, Error> {
+        let data = {
             let (tx, rx) = unbounded_channel();
             hci.register_data_handler(tx)?;
             rx
         };
-        let mut events = {
+        let events = {
             let (tx, rx) = unbounded_channel();
             hci.register_event_handler(
                 [EventCode::ConnectionComplete, EventCode::DisconnectionComplete, EventCode::MaxSlotsChange],
@@ -58,34 +59,19 @@ impl L2capServerBuilder {
             rx
         };
         let sender = hci.get_acl_sender();
-        Ok(spawn(async move {
-            let mut state = State {
-                sender,
-                connections: Default::default(),
-                handlers: self.handlers,
-                channels: Default::default(),
-                next_signaling_id: SignalingIds::default()
-            };
-
-            loop {
-                select! {
-                    Some(event) = events.recv() => {
-                        if let Err(err) = state.handle_event(event) {
-                            warn!("Error handling event: {:?}", err);
-                        }
-                    },
-                    Some(data) = data.recv() => {
-                        if let Err(err) = state.handle_data(data) {
-                            warn!("Error handling data: {:?}", err);
-                        }
-                    },
-                    else => break,
-                }
-            }
-            trace!("L2CAP server finished");
-        }))
+        Ok(L2capServer {
+            data,
+            events,
+            sender,
+            connections: Default::default(),
+            handlers: self.handlers,
+            channels: Default::default(),
+            next_signaling_id: Default::default(),
+        })
     }
+
 }
+
 
 #[allow(dead_code)]
 struct PhysicalConnection {
@@ -95,7 +81,11 @@ struct PhysicalConnection {
     assembler: AclDataAssembler
 }
 
-struct State {
+#[must_use = "Futures do nothing unless you `.await` or poll them"]
+pub struct L2capServer {
+    data: UnboundedReceiver<Bytes>,
+    events: UnboundedReceiver<(EventCode, Bytes)>,
+
     sender: AclSender,
     connections: BTreeMap<u16, PhysicalConnection>,
     handlers: BTreeMap<u64, Box<dyn ProtocolHandler>>,
@@ -103,7 +93,25 @@ struct State {
     next_signaling_id: SignalingIds
 }
 
-impl State {
+impl Future for L2capServer {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        while let Poll::Ready(data) = self.data.poll_recv(cx) {
+            let Some(data) = data else { return Poll::Ready(()); };
+            self.handle_data(data)
+                .unwrap_or_else(|err| warn!("Error handling data: {:?}", err));
+        }
+        while let Poll::Ready(event) = self.events.poll_recv(cx) {
+           let Some(event) = event else { return Poll::Ready(()); };
+           self.handle_event(event)
+               .unwrap_or_else(|err| warn!("Error handling event: {:?}", err));
+        }
+        Poll::Pending
+    }
+}
+
+impl L2capServer {
     fn get_connection(&mut self, handle: u16) -> Result<&mut PhysicalConnection, Error> {
         self.connections
             .get_mut(&handle)

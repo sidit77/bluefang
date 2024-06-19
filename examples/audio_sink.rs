@@ -109,7 +109,8 @@ async fn main() -> anyhow::Result<()> {
                     })
                     .build()
             )
-            .spawn(host.clone())?;
+            .run(&host)
+            .map(spawn)?;
 
         host.write_local_name("bluefang").await?;
         host.write_class_of_device(cod).await?;

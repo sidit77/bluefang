@@ -8,7 +8,7 @@ use tracing::{debug, error, instrument, trace, warn, Span};
 
 use crate::hci::{AclSendError, AclSender, Error};
 use crate::l2cap::configuration::ConfigurationParameter;
-use crate::l2cap::{ChannelEvent, ConfigureResult, ConnectionResult, ConnectionStatus, L2capHeader, State, CID_ID_SIGNALING};
+use crate::l2cap::{ChannelEvent, ConfigureResult, ConnectionResult, ConnectionStatus, L2capHeader, L2capServer, CID_ID_SIGNALING};
 use crate::utils::{catch_error, ResultExt};
 use crate::{ensure, log_assert};
 
@@ -38,7 +38,7 @@ impl AclSender {
     }
 }
 
-impl State {
+impl L2capServer {
     //fn send_response<F: FnOnce(&mut BytesMut)>(&self, ctx: SignalingContext, code: SignalingCode, writer: F) -> Result<(), Error> {
     //    let mut data = BytesMut::new();
     //    writer(&mut data);
