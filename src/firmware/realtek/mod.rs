@@ -2,12 +2,12 @@ mod commands;
 mod info;
 
 use std::future::Future;
-use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 use tracing::{debug, error};
 
 use crate::ensure;
+use crate::firmware::FileProvider;
 use crate::firmware::realtek::commands::{RtkHciExit, RTL_CHIP_REV, RTL_CHIP_SUBVER, RTL_CHIP_TYPE};
 use crate::firmware::realtek::info::*;
 use crate::hci::consts::CoreVersion;
@@ -16,19 +16,14 @@ use crate::hci::{Error, FirmwareLoader, Hci, LocalVersion};
 
 
 #[derive(Debug, Clone)]
-pub struct RealTekFirmwareLoader {
-    path: PathBuf
+pub struct RealTekFirmwareLoader<P> {
+    provider: P
 }
 
-impl RealTekFirmwareLoader {
+impl<P: FileProvider + Send + Sync> RealTekFirmwareLoader<P> {
 
-    pub fn new<P: AsRef<Path>>(path: P) -> Self {
-        Self { path: path.as_ref().to_path_buf() }
-    }
-
-    fn find_binary_path(&self, file_name: &str) -> Option<PathBuf> {
-        let file = self.path.join(file_name);
-        file.exists().then_some(file)
+    pub fn new(provider: P) -> Self {
+        Self { provider }
     }
 
     async fn find_chip_info(&self, hci: &Hci) -> Result<(u16, u16, CoreVersion, u8), Error> {
@@ -79,17 +74,16 @@ impl RealTekFirmwareLoader {
 
         debug!("found driver info: {:?}", info);
 
-        let firmware_path = self.find_binary_path(info.firmware_name).ok_or(Error::from("Failed to find firmware file"))?;
-        debug!("firmware path: {:?}", firmware_path);
-        let firmware = tokio::fs::read(firmware_path)
+        let firmware = self.provider
+            .get_file(info.firmware_name)
             .await
-            .map_err(|_| Error::from("Failed to find load firmware"))?;
+            .ok_or_else(|| Error::from("Failed to find load firmware"))?;
 
         let config = if !info.config_name.is_empty() {
-            let config_path = self.find_binary_path(info.config_name).ok_or(Error::from("Failed to find config file"))?;
-            let config = tokio::fs::read(config_path)
+            let config = self.provider
+                .get_file(info.config_name)
                 .await
-                .map_err(|_| Error::from("Failed to find load firmware config.bin"))?;
+                .ok_or_else(|| Error::from("Failed to find load firmware config.bin"))?;
             Some(config)
         } else {
             None
@@ -108,7 +102,7 @@ impl RealTekFirmwareLoader {
     }
 }
 
-impl FirmwareLoader for RealTekFirmwareLoader {
+impl<T: Send + Sync + FileProvider> FirmwareLoader for RealTekFirmwareLoader<T> {
     fn try_load_firmware<'a>(&'a self, host: &'a Hci) -> Pin<Box<dyn Future<Output = Result<bool, Error>> + Send + 'a>> {
         Box::pin(Self::try_load_firmware(self, host))
     }

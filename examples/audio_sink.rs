@@ -14,7 +14,7 @@ use bluefang::avdtp::{AvdtpBuilder, LocalEndpoint, StreamHandler, StreamHandlerF
 use bluefang::avrcp::notifications::CurrentTrack;
 use bluefang::avrcp::sdp::{AvrcpControllerServiceRecord, AvrcpTargetServiceRecord};
 use bluefang::avrcp::{Avrcp, AvrcpSession, Event, MediaAttributeId, Notification};
-use bluefang::firmware::RealTekFirmwareLoader;
+use bluefang::firmware::{FolderFileProvider, RealTekFirmwareLoader};
 use bluefang::hci::connection::ConnectionManagerBuilder;
 use bluefang::hci::consts::{AudioVideoClass, ClassOfDevice, DeviceClass, MajorServiceClasses};
 use bluefang::hci::{FirmwareLoader, Hci};
@@ -61,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     Hci::register_firmware_loaders([
-        RealTekFirmwareLoader::new("./firmware").boxed()
+        RealTekFirmwareLoader::new(FolderFileProvider::new("./firmware")).boxed()
     ]);
 
     let usb = UsbController::list(|info| info.vendor_id() == 0x2B89 || info.vendor_id() == 0x10D7)?
