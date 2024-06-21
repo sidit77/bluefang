@@ -18,7 +18,7 @@ use tracing::{debug, warn};
 
 use crate::ensure;
 use crate::hci::acl::{AclDataAssembler, AclHeader};
-use crate::hci::consts::{EventCode, LinkType, RemoteAddr, Status};
+use crate::hci::consts::{ConnectionMode, EventCode, LinkType, RemoteAddr, Status};
 use crate::hci::{AclSender, Error, Hci};
 use crate::l2cap::channel::Channel;
 use crate::l2cap::configuration::ConfigurationParameter;
@@ -53,7 +53,7 @@ impl L2capServerBuilder {
         let events = {
             let (tx, rx) = unbounded_channel();
             hci.register_event_handler(
-                [EventCode::ConnectionComplete, EventCode::DisconnectionComplete, EventCode::MaxSlotsChange],
+                [EventCode::ConnectionComplete, EventCode::DisconnectionComplete, EventCode::MaxSlotsChange, EventCode::ModeChange],
                 tx
             )?;
             rx
@@ -77,6 +77,7 @@ impl L2capServerBuilder {
 struct PhysicalConnection {
     handle: u16,
     max_slots: u8,
+    mode: ConnectionMode,
     addr: RemoteAddr,
     assembler: AclDataAssembler
 }
@@ -150,6 +151,7 @@ impl L2capServer {
                                 PhysicalConnection {
                                     handle,
                                     max_slots: 0x01,
+                                    mode: ConnectionMode::default(),
                                     addr,
                                     assembler: AclDataAssembler::default()
                                 }
@@ -181,7 +183,17 @@ impl L2capServer {
                 let max_slots: u8 = data.read_le()?;
                 data.finish()?;
                 self.get_connection(handle)?.max_slots = max_slots;
-                debug!("Max slots change: {:?} {:?}", handle, max_slots);
+                debug!("Max slots changed for {:#04x}: {:?}", handle, max_slots);
+            }
+            EventCode::ModeChange => {
+                // ([Vol 4] Part E, Section 7.7.20).
+                let _status: Status = data.read_le()?;
+                let handle: u16 = data.read_le()?;
+                let current_mode: ConnectionMode = data.read_le()?;
+                let _interval: u16 = data.read_le()?;
+                data.finish()?;
+                self.get_connection(handle)?.mode = current_mode;
+                debug!("Mode change for {:#04x}: {:?}", handle, current_mode);
             }
             _ => unreachable!()
         }

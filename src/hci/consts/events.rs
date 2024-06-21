@@ -71,6 +71,7 @@ pub enum EventCode {
     InquiryResponseNotification = 0x56,
     AuthenticatedPayloadTimeoutExpired = 0x57,
     SamStatusChange = 0x58,
+    EncryptionChangeV2 = 0x59,
     Vendor = 0xFF
 }
 

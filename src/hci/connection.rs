@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
 use futures_lite::{Stream, StreamExt};
@@ -93,9 +94,6 @@ struct ConnectionManagerState {
 impl ConnectionManagerState {
     async fn handle_event(&mut self, event: ConnectionEvent) -> Result<(), Error> {
         match event {
-            ConnectionEvent::ConnectionComplete { .. } => {}
-            ConnectionEvent::DisconnectionComplete { .. } => {}
-            ConnectionEvent::RemoteNameRequestComplete { .. } => {}
             ConnectionEvent::ConnectionRequest { addr, link_type, .. } => {
                 ensure!(link_type == LinkType::Acl, "Invalid link type");
                 debug!("Connection request: {}", addr);
@@ -157,7 +155,8 @@ impl ConnectionManagerState {
             ConnectionEvent::RemoteOobDataRequest { addr } => {
                 debug!("Remote OOB data request: {}", addr);
                 panic!("OOB data not supported");
-            }
+            },
+            _ => {}
         }
         Ok(())
     }
@@ -202,6 +201,13 @@ pub enum ConnectionEvent {
         addr: RemoteAddr,
         name: String
     },
+    // ([Vol 4] Part E, Section 7.7.8).
+    EncryptionChanged {
+        status: Status,
+        handle: u16,
+        mode: EncryptionMode,
+        key_size: Option<u8>
+    },
     // ([Vol 4] Part E, Section 7.7.22)
     PinCodeRequest {
         addr: RemoteAddr
@@ -231,6 +237,11 @@ pub enum ConnectionEvent {
     UserConfirmationRequest {
         addr: RemoteAddr,
         passkey: u32
+    },
+    // ([Vol 4] Part E, Section 7.7.46).
+    LinkSuperVisionTimeoutChanged {
+        handle: u16,
+        timeout: Option<Duration>
     },
     // ([Vol 4] Part E, Section 7.7.48).
     UserPasskeyNotification {
@@ -269,12 +280,14 @@ impl ConnectionEventReceiver {
                     EventCode::ConnectionComplete,
                     EventCode::DisconnectionComplete,
                     EventCode::RemoteNameRequestComplete,
+                    EventCode::EncryptionChange,
                     EventCode::PinCodeRequest,
                     EventCode::LinkKeyNotification,
                     EventCode::LinkKeyRequest,
                     EventCode::IoCapabilityRequest,
                     EventCode::IoCapabilityResponse,
                     EventCode::UserConfirmationRequest,
+                    EventCode::LinkSupervisionTimeoutChanged,
                     EventCode::UserPasskeyNotification,
                     EventCode::UserPasskeyRequest,
                     EventCode::KeypressNotification,
@@ -330,6 +343,19 @@ impl Stream for ConnectionEventReceiver {
                     data.finish()?;
                     Ok(ConnectionEvent::RemoteNameRequestComplete { status, addr, name })
                 }
+                EventCode::EncryptionChange | EventCode::EncryptionChangeV2 => {
+                    let status: Status = data.read_le()?;
+                    let handle: u16 = data.read_le()?;
+                    let mode: EncryptionMode = data.read_le()?;
+                    let key_size: u8 = if code == EventCode::EncryptionChangeV2 {
+                        data.read_le()?
+                    } else {
+                        0
+                    };
+                    let key_size = (key_size > 0 && mode != EncryptionMode::Off).then_some(key_size);
+                    data.finish()?;
+                    Ok(ConnectionEvent::EncryptionChanged { status, handle, mode, key_size})
+                }
                 EventCode::ConnectionRequest => {
                     let addr: RemoteAddr = data.read_le()?;
                     let class: ClassOfDevice = data.read_le()?;
@@ -380,6 +406,14 @@ impl Stream for ConnectionEventReceiver {
                     data.finish()?;
                     Ok(ConnectionEvent::SimplePairingComplete { status, addr })
                 }
+                EventCode::LinkSupervisionTimeoutChanged => {
+                    let handle: u16 = data.read_le()?;
+                    let timeout: u16 = data.read_le()?;
+                    let timeout = (timeout > 0)
+                        .then_some(BASE_BAND_SLOT * timeout as u32);
+                    data.finish()?;
+                    Ok(ConnectionEvent::LinkSuperVisionTimeoutChanged { handle, timeout })
+                }
                 EventCode::UserPasskeyNotification => {
                     let addr: RemoteAddr = data.read_le()?;
                     let passkey: u32 = data.read_le()?;
@@ -407,7 +441,7 @@ impl Stream for ConnectionEventReceiver {
             });
             match event {
                 Ok(event) => return Poll::Ready(Some(event)),
-                Err(err) => warn!("Error parsing connection event: {:?}", err)
+                Err(err) => warn!("Error parsing connection event {:?}: {:?}", code, err)
             }
         }
         Poll::Pending

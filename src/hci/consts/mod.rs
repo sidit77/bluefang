@@ -3,6 +3,7 @@ mod events;
 mod company_id;
 
 use std::fmt::{Debug, Display, Formatter};
+use std::time::Duration;
 use instructor::utils::u24;
 use instructor::{BufferMut, Endian, Exstruct, Instruct};
 
@@ -171,3 +172,24 @@ pub enum KeypressNotificationType {
     Cleared = 0x03,
     EntryCompleted = 0x04
 }
+
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Exstruct, Instruct)]
+#[repr(u8)]
+pub enum ConnectionMode {
+    #[default]
+    Active = 0x00,
+    Hold = 0x01,
+    Sniff = 0x02,
+}
+
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Exstruct, Instruct)]
+#[repr(u8)]
+pub enum EncryptionMode {
+    #[default]
+    Off = 0x00,
+    E0OrAesCcm = 0x01,
+    AesCcm = 0x02,
+}
+
+
+pub const BASE_BAND_SLOT: Duration = Duration::from_nanos(625000);
