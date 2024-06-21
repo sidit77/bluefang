@@ -8,7 +8,6 @@ lto = true
 codegen-units=1
 # strip="symbols"
 
-
 [dependencies]
 tracing = "0.1.40"
 nusb = "0.1.9"
@@ -22,6 +21,7 @@ futures-lite = "2.3.0"
 bytes = "1"
 enum-iterator = "2.1.0"
 instructor = { git = "https://github.com/sidit77/instructor.git", features = ["derive"] }
+serde = { version = "1", optional = true, features = ["derive"]}
 
 
 [dev-dependencies]

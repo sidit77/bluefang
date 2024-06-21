@@ -3,6 +3,7 @@ mod events;
 mod company_id;
 
 use std::fmt::{Debug, Display, Formatter};
+use std::str::FromStr;
 use std::time::Duration;
 use instructor::utils::u24;
 use instructor::{BufferMut, Endian, Exstruct, Instruct};
@@ -102,6 +103,51 @@ impl Display for RemoteAddr {
     }
 }
 
+impl FromStr for RemoteAddr {
+    type Err = instructor::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut addr = [0; 6];
+        let mut iter = s
+            .split(':')
+            .rev()
+            .map(|s| u8::from_str_radix(s, 16)
+                .map_err(|_| instructor::Error::InvalidValue));
+        for i in addr.iter_mut() {
+            *i = iter.next().ok_or(instructor::Error::TooShort)??;
+        }
+        Ok(Self(addr))
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for RemoteAddr {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(&self)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for RemoteAddr {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: serde::Deserializer<'de> {
+        struct RemoteAddrVisitor;
+
+        impl serde::de::Visitor<'_> for RemoteAddrVisitor {
+            type Value = RemoteAddr;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a string in the format XX:XX:XX:XX:XX:XX")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> where E: serde::de::Error {
+                value.parse().map_err(serde::de::Error::custom)
+            }
+        }
+
+        deserializer.deserialize_str(RemoteAddrVisitor)
+    }
+}
+
 impl From<[u8; 6]> for RemoteAddr {
     fn from(addr: [u8; 6]) -> Self {
         Self(addr)
@@ -120,6 +166,59 @@ pub struct LinkKey([u8; 16]);
 impl Debug for LinkKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:02X?}", &self.0)
+    }
+}
+
+impl Display for LinkKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        for i in &self.0 {
+            write!(f, "{:02X}", i)?;
+        }
+        Ok(())
+    }
+}
+
+impl FromStr for LinkKey {
+    type Err = instructor::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut key = [0; 16];
+        let mut iter = (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16)
+                .map_err(|_| instructor::Error::InvalidValue));
+        for i in key.iter_mut() {
+            *i = iter.next().ok_or(instructor::Error::TooShort)??;
+        }
+        Ok(Self(key))
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for LinkKey {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(&self)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for LinkKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: serde::Deserializer<'de> {
+        struct LinkKeyVisitor;
+
+        impl serde::de::Visitor<'_> for LinkKeyVisitor {
+            type Value = LinkKey;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a 16 byte hex string")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> where E: serde::de::Error {
+                value.parse().map_err(serde::de::Error::custom)
+            }
+        }
+
+        deserializer.deserialize_str(LinkKeyVisitor)
     }
 }
 
