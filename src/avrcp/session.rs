@@ -237,6 +237,15 @@ pub mod notifications {
         Position(Duration)
     }
 
+    impl PlaybackPosition {
+        pub fn as_option(&self) -> Option<Duration> {
+            match self {
+                Self::Position(duration) => Some(*duration),
+                _ => None
+            }
+        }
+    }
+
     impl Exstruct<BigEndian> for PlaybackPosition {
         fn read_from_buffer<B: Buffer>(buffer: &mut B) -> Result<Self, Error> {
             let pos: u32 = buffer.read_be()?;
@@ -256,4 +265,5 @@ pub mod notifications {
     impl Notification for PlaybackPosition {
         const EVENT_ID: EventId = EventId::PlaybackPosChanged;
     }
+
 }
