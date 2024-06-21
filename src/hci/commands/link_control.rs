@@ -1,5 +1,5 @@
 use bytes::BufMut;
-use instructor::BufferMut;
+use instructor::{BufferMut, Exstruct, Instruct};
 
 use crate::hci::consts::{AuthenticationRequirements, IoCapability, Lap, LinkKey, OobDataPresence, RemoteAddr, Role, Status};
 use crate::hci::{Error, Hci, Opcode, OpcodeGroup};
@@ -79,6 +79,17 @@ impl Hci {
         .await
     }
 
+    /// ([Vol 4] Part E, Section 7.1.19).
+    pub async fn request_remote_name(&self, bd_addr: RemoteAddr, mode: PageScanRepititionMode) -> Result<(), Error> {
+        self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x0019), |p| {
+            p.write_le(bd_addr);
+            p.write_le(mode);
+            p.write_le(0x00u8);
+            //Clock offset
+            p.write_le(0x00u16);
+        }).await
+    }
+
     /// ([Vol 4] Part E, Section 7.1.29).
     pub async fn io_capability_reply(
         &self, bd_addr: RemoteAddr, io: IoCapability, oob: OobDataPresence, auth: AuthenticationRequirements
@@ -99,4 +110,12 @@ impl Hci {
         })
         .await
     }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Exstruct, Instruct)]
+#[repr(u8)]
+pub enum PageScanRepititionMode {
+    R0 = 0x00,
+    R1 = 0x01,
+    R2 = 0x02
 }

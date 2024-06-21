@@ -3,11 +3,12 @@ mod info_params;
 mod link_control;
 
 use std::fmt::{Debug, Formatter};
-
-pub use info_params::*;
 use instructor::Exstruct;
 use num_enum::TryFromPrimitive;
-//pub use link_control::*;
+
+pub use info_params::*;
+pub use link_control::*;
+
 //pub use hci_control::*;
 
 // Opcode group field definitions.

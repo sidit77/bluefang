@@ -95,6 +95,7 @@ impl ConnectionManagerState {
         match event {
             ConnectionEvent::ConnectionComplete { .. } => {}
             ConnectionEvent::DisconnectionComplete { .. } => {}
+            ConnectionEvent::RemoteNameRequestComplete { .. } => {}
             ConnectionEvent::ConnectionRequest { addr, link_type, .. } => {
                 ensure!(link_type == LinkType::Acl, "Invalid link type");
                 debug!("Connection request: {}", addr);
@@ -173,7 +174,7 @@ impl ConnectionManagerState {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ConnectionEvent {
     // ([Vol 4] Part E, Section 7.7.3).
     ConnectionComplete {
@@ -194,6 +195,12 @@ pub enum ConnectionEvent {
         status: Status,
         handle: u16,
         reason: Status
+    },
+    // ([Vol 4] Part E, Section 7.7.7).
+    RemoteNameRequestComplete {
+        status: Status,
+        addr: RemoteAddr,
+        name: String
     },
     // ([Vol 4] Part E, Section 7.7.22)
     PinCodeRequest {
@@ -261,6 +268,7 @@ impl ConnectionEventReceiver {
                     EventCode::ConnectionRequest,
                     EventCode::ConnectionComplete,
                     EventCode::DisconnectionComplete,
+                    EventCode::RemoteNameRequestComplete,
                     EventCode::PinCodeRequest,
                     EventCode::LinkKeyNotification,
                     EventCode::LinkKeyRequest,
@@ -312,6 +320,15 @@ impl Stream for ConnectionEventReceiver {
                     let reason: Status = data.read_le()?;
                     data.finish()?;
                     Ok(ConnectionEvent::DisconnectionComplete { status, handle, reason })
+                },
+                EventCode::RemoteNameRequestComplete => {
+                    let status: Status = data.read_le()?;
+                    let addr: RemoteAddr = data.read_le()?;
+                    let name: String = String::from_utf8_lossy(&data.split_to(248))
+                        .trim_end_matches('\0')
+                        .to_string();
+                    data.finish()?;
+                    Ok(ConnectionEvent::RemoteNameRequestComplete { status, addr, name })
                 }
                 EventCode::ConnectionRequest => {
                     let addr: RemoteAddr = data.read_le()?;
