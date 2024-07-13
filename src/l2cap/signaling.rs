@@ -74,6 +74,7 @@ impl L2capServer {
                     Ok(())
                 }
                 SignalingCode::ConnectionRequest => self.handle_connection_request(ctx, data),
+                SignalingCode::ConnectionResponse => self.handle_connection_response(ctx, data),
                 SignalingCode::ConfigureRequest => self.handle_configuration_request(ctx, data),
                 SignalingCode::ConfigureResponse => self.handle_configuration_response(ctx, data),
                 SignalingCode::DisconnectionRequest => self.handle_disconnect_request(ctx, data),
@@ -121,17 +122,34 @@ impl L2capServer {
         Ok(())
     }
 
+    // ([Vol 3] Part A, Section 4.3).
+    fn handle_connection_response(&mut self, ctx: SignalingContext, mut data: Bytes) -> Result<(), RejectReason> {
+        let dcid: u16 = data.read_le()?;
+        let scid: u16 = data.read_le()?;
+        let result: ConnectionResult = data.read_le()?;
+        let status: ConnectionStatus = data.read_le()?;
+        data.finish()?;
+        debug!("Connection response: DCID={:04X} SCID={:04X} result={:?} status={:?}", dcid, scid, result, status);
+
+        self.send_channel_msg(scid, ChannelEvent::ConnectionResponse {
+            id: ctx.id,
+            remote_cid: dcid,
+            result,
+            status,
+        }).map_err(|_| RejectReason::InvalidCid { scid, dcid })
+    }
+
     // ([Vol 3] Part A, Section 4.4).
     fn handle_configuration_request(&mut self, ctx: SignalingContext, mut data: Bytes) -> Result<(), RejectReason> {
         let dcid: u16 = data.read_le()?;
         let flags: u16 = data.read_le()?;
         //TODO handle continuation packets
         log_assert!(flags & 0xFFFE == 0);
-        let param: Vec<ConfigurationParameter> = data.read()?;
+        let options: Vec<ConfigurationParameter> = data.read()?;
         data.finish()?;
         debug!("Configuration request: DCID={:04X}", dcid);
 
-        self.send_channel_msg(dcid, ChannelEvent::ConfigurationRequest(ctx.id, param))
+        self.send_channel_msg(dcid, ChannelEvent::ConfigurationRequest{ id: ctx.id, options })
             .map_err(|_| RejectReason::InvalidCid { scid: 0, dcid })
     }
 
@@ -142,11 +160,11 @@ impl L2capServer {
         let result: ConfigureResult = data.read_le()?;
         //TODO handle continuation packets
         log_assert!(flags & 0xFFFE == 0);
-        let param: Vec<ConfigurationParameter> = data.read()?;
+        let options: Vec<ConfigurationParameter> = data.read()?;
         data.finish()?;
         debug!("Configuration response: SCID={:04X}", scid);
 
-        self.send_channel_msg(scid, ChannelEvent::ConfigurationResponse(ctx.id, result, param))
+        self.send_channel_msg(scid, ChannelEvent::ConfigurationResponse{ id: ctx.id, result, options })
             .map_err(|_| RejectReason::InvalidCid { scid, dcid: 0 })
     }
 
@@ -158,7 +176,7 @@ impl L2capServer {
         debug!("Disconnect request: DCID={:04X} SCID={:04X}", dcid, scid);
         match self.channels.remove(&dcid) {
             Some(channel) => {
-                let _ = channel.send(ChannelEvent::DisconnectRequest(ctx.id));
+                let _ = channel.send(ChannelEvent::DisconnectRequest { id: ctx.id });
                 Ok(())
             }
             None => Err(RejectReason::InvalidCid { scid, dcid })
@@ -173,7 +191,7 @@ impl L2capServer {
         debug!("Disconnect response: DCID={:04X} SCID={:04X}", dcid, scid);
         match self.channels.remove(&dcid) {
             Some(channel) => {
-                let _ = channel.send(ChannelEvent::DisconnectResponse(ctx.id));
+                let _ = channel.send(ChannelEvent::DisconnectResponse { id: ctx.id });
                 Ok(())
             }
             None => {
@@ -280,7 +298,7 @@ pub enum SignalingCode {
 
 // ([Vol 3] Part A, Section 4.2).
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-struct Psm(pub u64);
+pub struct Psm(pub u64);
 
 impl Exstruct<LittleEndian> for Psm {
     fn read_from_buffer<B: Buffer + ?Sized>(buffer: &mut B) -> Result<Self, instructor::Error> {

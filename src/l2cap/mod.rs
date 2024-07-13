@@ -256,7 +256,7 @@ pub struct L2capHeader {
     pub cid: u16
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Instruct)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Instruct, Exstruct)]
 #[repr(u16)]
 pub enum ConnectionResult {
     Success = 0x0000,
@@ -268,7 +268,7 @@ pub enum ConnectionResult {
     RefusedSourceCidAlreadyAllocated = 0x0007
 }
 
-#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Instruct)]
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Instruct, Exstruct)]
 #[repr(u16)]
 pub enum ConnectionStatus {
     #[default]
@@ -317,10 +317,27 @@ impl SignalingIds {
 
 pub enum ChannelEvent {
     DataReceived(Bytes),
-    ConfigurationRequest(u8, Vec<ConfigurationParameter>),
-    ConfigurationResponse(u8, ConfigureResult, Vec<ConfigurationParameter>),
-    DisconnectRequest(u8),
-    DisconnectResponse(u8)
+    ConnectionResponse {
+        id: u8,
+        remote_cid: u16,
+        result: ConnectionResult,
+        status: ConnectionStatus
+    },
+    ConfigurationRequest {
+        id: u8,
+        options: Vec<ConfigurationParameter>
+    },
+    ConfigurationResponse {
+        id: u8,
+        result: ConfigureResult,
+        options: Vec<ConfigurationParameter>
+    },
+    DisconnectRequest {
+        id: u8
+    },
+    DisconnectResponse {
+        id: u8
+    }
 }
 
 pub trait ProtocolHandlerProvider {

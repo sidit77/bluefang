@@ -10,10 +10,11 @@ use tokio::sync::mpsc::UnboundedReceiver as MpscReceiver;
 use tokio::time::sleep;
 use tracing::{debug, info_span, instrument, trace, warn, Span, error};
 use tracing::field::Empty;
+use crate::ensure;
 
 use crate::hci::{AclSendError, AclSender};
 use crate::l2cap::configuration::{ConfigurationParameter, FlushTimeout, Mtu};
-use crate::l2cap::signaling::{RejectReason, SignalingCode, SignalingContext};
+use crate::l2cap::signaling::{Psm, RejectReason, SignalingCode, SignalingContext};
 use crate::l2cap::{ChannelEvent, CID_ID_NONE, ConfigureResult, ConnectionResult, ConnectionStatus, L2capHeader, SignalingIds};
 use crate::utils::{now_or_never, Loggable, IgnoreableResult};
 
@@ -66,7 +67,7 @@ impl Loggable for Error {
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum State {
     Closed(ClosedState),
-    //WaitConnect,
+    WaitConnectRsp,
     Config(ConfigState),
     Open,
     WaitDisconnect
@@ -124,10 +125,21 @@ impl Channel {
     }
 
     pub fn connection_request_received(&mut self, remote_cid: u16, transaction_id: u8) {
+        debug_assert!(self.state == State::Closed(ClosedState::Idle), "Connection request received in non-idle state");
         self.set_remote_cid(remote_cid);
         self.set_state(State::Closed(ClosedState::WaitingForResponse(transaction_id)));
     }
 
+    #[instrument(parent = &self.span, skip(self))]
+    pub async fn connect(&mut self, psm: u64) -> Result<(), Error> {
+        ensure!(self.state == State::Closed(ClosedState::Idle), Error::BadState);
+        self.send_signaling(None, SignalingCode::ConnectionRequest, (Psm(psm), self.local_cid))?;
+        self.set_state(State::WaitConnectRsp);
+        self.wait_for_connection().await?;
+        Ok(())
+    }
+
+    #[instrument(parent = &self.span, skip(self))]
     pub fn accept_connection(&mut self) -> Result<(), Error> {
         if let State::Closed(ClosedState::WaitingForResponse(transaction_id)) = self.state {
             self.send_signaling(Some(transaction_id), SignalingCode::ConnectionResponse, (
@@ -142,6 +154,7 @@ impl Channel {
         }
     }
 
+    #[instrument(parent = &self.span, skip(self))]
     pub fn reject_connection(&mut self) -> Result<(), Error> {
         if let State::Closed(ClosedState::WaitingForResponse(transaction_id)) = self.state {
             self.send_signaling(Some(transaction_id), SignalingCode::ConnectionResponse, (
@@ -236,11 +249,11 @@ impl Channel {
             match self.state {
                 // ([Vol 3] Part A, Section 6.1.1)
                 State::Closed(cs) => match data {
-                    ConfigurationRequest(id, _) => {
+                    ConfigurationRequest { id, .. } => {
                         /* Send CommandReject (with reason Invalid CID) */
                         self.send_invalid_cid(id)?;
                     }
-                    DisconnectRequest(id) => {
+                    DisconnectRequest { id } => {
                         /* Send DisconnectRsp */
                         self.send_disconnect_response(id)?;
                         if cs != ClosedState::Disconnected {
@@ -249,9 +262,27 @@ impl Channel {
                     }
                     _ => { /* Ignore */ }
                 },
+                // ([Vol 3] Part A, Section 6.1.2)
+                State::WaitConnectRsp => match data {
+                    ConnectionResponse { result, remote_cid, .. } => match result {
+                        ConnectionResult::Success => {
+                            self.set_remote_cid(remote_cid);
+                            event!(self.set_state(State::Config(ConfigState::Config)));
+                        }
+                        ConnectionResult::Pending => { /* Stall */ }
+                        _ => {
+                            event!(self.set_state(State::Closed(ClosedState::Disconnected)));
+                        }
+                    }
+                    ConfigurationRequest { id, .. } => {
+                        /* Send CommandReject (with reason Invalid CID) */
+                        self.send_invalid_cid(id)?;
+                    }
+                    DataReceived(_) | ConfigurationResponse { .. } | DisconnectRequest { .. } | DisconnectResponse { .. } => { /* Ignore */  }
+                }
                 // ([Vol 3] Part A, Section 6.1.4)
                 State::Config(cs) => match data {
-                    ConfigurationRequest(id, options) => match cs {
+                    ConfigurationRequest { id, options} => match cs {
                         ConfigState::Config => {
                             event!(self.handle_config_req(id, options, State::Config(ConfigState::SendConfig))?);
                         }
@@ -263,51 +294,51 @@ impl Channel {
                         }
                         _ => debug!("Unexpected ConfigurationRequest in state {:?}", self.state)
                     },
-                    ConfigurationResponse(_, rsp, options) => match cs {
+                    ConfigurationResponse {result, options, .. } => match cs {
                         ConfigState::ConfigReqRsp => {
-                            event!(self.handle_config_resp(rsp, options, State::Config(ConfigState::ConfigReq))?);
+                            event!(self.handle_config_resp(result, options, State::Config(ConfigState::ConfigReq))?);
                         }
                         ConfigState::ConfigRsp => {
-                            event!(self.handle_config_resp(rsp, options, State::Open)?);
+                            event!(self.handle_config_resp(result, options, State::Open)?);
                         }
                         ConfigState::Config | ConfigState::SendConfig | ConfigState::ConfigReq => { /* Ignore */ }
                     },
-                    DisconnectRequest(id) => {
+                    DisconnectRequest { id } => {
                         // Send DisconnectRsp
                         self.send_disconnect_response(id)?;
                         event!(self.set_state(State::Closed(ClosedState::Disconnected)));
                     }
-                    DisconnectResponse(_) => { /* Ignore */ }
+                    DisconnectResponse { .. } | ConnectionResponse { .. } => { /* Ignore */ }
                     DataReceived(data) => return Poll::Ready(Ok(Event::DataReceived(data)))
                 },
                 // ([Vol 3] Part A, Section 6.1.5)
                 State::Open => match data {
-                    ConfigurationRequest(id, options) => {
+                    ConfigurationRequest { id, options} => {
                         event!(self.handle_config_req(id, options, State::Config(ConfigState::SendConfig))?);
                     }
-                    DisconnectRequest(id) => {
+                    DisconnectRequest { id } => {
                         // Send DisconnectRsp
                         self.send_disconnect_response(id)?;
                         event!(self.set_state(State::Closed(ClosedState::Disconnected)));
                     }
                     DataReceived(data) => return Poll::Ready(Ok(Event::DataReceived(data))),
-                    DisconnectResponse(_) | ConfigurationResponse(_, _, _) => { /* Ignore */ }
+                    DisconnectResponse { .. } | ConfigurationResponse { .. } | ConnectionResponse { .. } => { /* Ignore */ }
                 },
                 // ([Vol 3] Part A, Section 6.1.6)
                 State::WaitDisconnect => match data {
-                    ConfigurationRequest(id, _) => {
+                    ConfigurationRequest { id, .. } => {
                         // Send CommandReject with reason Invalid CID
                         self.send_invalid_cid(id)?;
                     }
-                    DisconnectRequest(id) => {
+                    DisconnectRequest { id} => {
                         // Send DisconnectRsp
                         self.send_disconnect_response(id)?;
                         event!(self.set_state(State::Closed(ClosedState::Disconnected)));
                     }
-                    DisconnectResponse(_) => {
+                    DisconnectResponse { .. } => {
                         event!(self.set_state(State::Closed(ClosedState::Disconnected)));
                     }
-                    DataReceived(_) | ConfigurationResponse(_, _, _) => { /* Ignore */ }
+                    DataReceived(_) | ConfigurationResponse { .. } | ConnectionResponse { .. } => { /* Ignore */ }
                 }
             }
         }
@@ -365,6 +396,22 @@ impl Channel {
                 unimplemented!("Configuration failed: {:?}", other)
             }
         }
+    }
+
+    fn wait_for_connection(&mut self) -> impl Future<Output = Result<(), Error>> + '_ {
+        poll_fn(|cx| {
+            if let State::Closed(ClosedState::Disconnected) = self.state {
+                return Poll::Ready(Err(Error::Disconnected));
+            }
+            while let Poll::Ready(event) = self.poll_events(cx) {
+                match event? {
+                    Event::ConnectionComplete => return Poll::Ready(Ok(())),
+                    Event::DisconnectComplete => return Poll::Ready(Err(Error::Disconnected)),
+                    _ => warn!("Unexpected event")
+                }
+            }
+            Poll::Pending
+        })
     }
 
     fn wait_for_configuration_complete(&mut self) -> impl Future<Output = Result<(), Error>> + '_ {
