@@ -13,10 +13,9 @@ use std::task::{Context, Poll};
 use bytes::Bytes;
 use instructor::utils::Length;
 use instructor::{Buffer, Exstruct, Instruct};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver as MpscReceiver, UnboundedReceiver, UnboundedSender as MpscSender};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender as MpscSender};
 use tracing::{debug, warn};
 
-use crate::ensure;
 use crate::hci::acl::{AclDataAssembler, AclHeader};
 use crate::hci::consts::{ConnectionMode, EventCode, LinkType, RemoteAddr, Status};
 use crate::hci::{AclSender, Error, Hci};
@@ -90,7 +89,7 @@ pub struct L2capServer {
     sender: AclSender,
     connections: BTreeMap<u16, PhysicalConnection>,
     handlers: BTreeMap<u64, Box<dyn ProtocolHandler>>,
-    channels: BTreeMap<u16, (u16, MpscSender<ChannelEvent>)>,
+    channels: BTreeMap<u16, MpscSender<ChannelEvent>>,
     next_signaling_id: SignalingIds
 }
 
@@ -120,7 +119,7 @@ impl L2capServer {
     }
 
     fn send_channel_msg(&mut self, cid: u16, msg: ChannelEvent) -> Result<(), Error> {
-        let (_, channel) = self
+        let channel = self
             .channels
             .get(&cid)
             .ok_or(Error::UnknownChannelId(cid))?;
@@ -230,27 +229,22 @@ impl L2capServer {
         }
     }
 
-    fn handle_channel_connection(&mut self, handle: u16, psm: u64, scid: u16, rx: MpscReceiver<ChannelEvent>) -> Result<u16, ConnectionResult> {
-        debug!("Connection request: PSM={:04X} SCID={:04X}", psm, scid);
-        let server = self
-            .handlers
-            .get_mut(&psm)
-            .ok_or(ConnectionResult::RefusedPsmNotSupported)?;
-        //ensure!(self.servers.contains_key(&psm), ConnectionResult::RefusedPsmNotSupported);
-        ensure!(CID_RANGE_DYNAMIC.contains(&scid), ConnectionResult::RefusedInvalidSourceCid);
-        //TODO check if source cid already exists for physical connection
-
-        let dcid = CID_RANGE_DYNAMIC
+    pub fn new_channel(&mut self, handle: u16) -> Option<Channel> {
+        assert!(self.connections.contains_key(&handle));
+        self.channels.retain(|_, tx| !tx.is_closed());
+        let scid = CID_RANGE_DYNAMIC
             .clone()
-            .find(|&cid| !self.channels.contains_key(&cid) && cid != scid)
-            .ok_or(ConnectionResult::RefusedNoResources)?;
-
-        let channel = Channel::new(handle, scid, dcid, rx, self.sender.clone(), self.next_signaling_id.clone());
-        if server.handle(channel) {
-            Ok(dcid)
-        } else {
-            Err(ConnectionResult::RefusedNoResources)
-        }
+            .find(|&cid| !self.channels.contains_key(&cid))?;
+        let (tx, rx) = unbounded_channel();
+        self.channels.insert(scid, tx);
+        let channel = Channel::new(
+            handle,
+            scid,
+            rx,
+            self.sender.clone(),
+            self.next_signaling_id.clone()
+        );
+        Some(channel)
     }
 }
 
@@ -322,7 +316,6 @@ impl SignalingIds {
 }
 
 pub enum ChannelEvent {
-    OpenChannelResponseSent(bool),
     DataReceived(Bytes),
     ConfigurationRequest(u8, Vec<ConfigurationParameter>),
     ConfigurationResponse(u8, ConfigureResult, Vec<ConfigurationParameter>),
@@ -337,8 +330,7 @@ pub trait ProtocolHandlerProvider {
 pub trait ProtocolHandler: Send {
     fn psm(&self) -> u64;
 
-    //TODO Add a return code to indicate if the channel was expected
-    fn handle(&self, channel: Channel) -> bool;
+    fn handle(&self, channel: Channel);
 }
 
 impl<P> ProtocolHandlerProvider for P
@@ -359,7 +351,7 @@ pub struct ProtocolDelegate<H, F> {
 impl<H, F> ProtocolDelegate<H, F>
 where
     H: Send + 'static,
-    F: Fn(&H, Channel) -> bool + Send + 'static
+    F: Fn(&H, Channel) + Send + 'static
 {
     pub fn boxed<I: Into<u64>>(psm: I, handler: H, map_func: F) -> Box<dyn ProtocolHandler> {
         Box::new(Self {
@@ -373,13 +365,13 @@ where
 impl<H, F> ProtocolHandler for ProtocolDelegate<H, F>
 where
     H: Send,
-    F: Fn(&H, Channel) -> bool + Send
+    F: Fn(&H, Channel) + Send
 {
     fn psm(&self) -> u64 {
         self.psm
     }
 
-    fn handle(&self, channel: Channel) -> bool {
+    fn handle(&self, channel: Channel) {
         (self.map_func)(&self.handler, channel)
     }
 }

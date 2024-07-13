@@ -3,8 +3,7 @@ mod futures;
 mod iter;
 mod mutex_cell;
 
-use std::error::Error;
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 
 pub use bytes::{FromStruct, SliceExt};
 pub use futures::*;
@@ -98,29 +97,44 @@ where
     f()
 }
 
-pub trait IgnoreableError {
+pub trait Loggable: Display {
     fn should_log(&self) -> bool;
 }
 
-impl<T> IgnoreableError for tokio::sync::mpsc::error::TrySendError<T> {
+impl<T> Loggable for tokio::sync::mpsc::error::TrySendError<T> {
     fn should_log(&self) -> bool {
         matches!(self, tokio::sync::mpsc::error::TrySendError::Full(_))
     }
 }
 
-pub trait ResultExt<E> {
-    fn ignore(self);
+pub trait LoggableResult<T, E> {
+    fn log_err(self) -> Result<T, E>;
 }
 
-impl<E: IgnoreableError + Error> ResultExt<E> for Result<(), E> {
+impl<T, E: Loggable> LoggableResult<T, E> for Result<T, E> {
+
     #[track_caller]
-    fn ignore(self) {
-        if let Err(e) = self {
+    fn log_err(self) -> Result<T, E> {
+        if let Err(e) = &self {
             if e.should_log() {
                 warn!("Unexpected error at {}: {}", std::panic::Location::caller(), e);
             }
         }
+        self
     }
+
+}
+
+pub trait IgnoreableResult<E> {
+    fn ignore(self);
+}
+
+impl<E: Loggable> IgnoreableResult<E> for Result<(), E> {
+    #[track_caller]
+    fn ignore(self) {
+        let _ = self.log_err();
+    }
+
 }
 /*
 

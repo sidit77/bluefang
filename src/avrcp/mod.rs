@@ -19,7 +19,7 @@ use crate::avrcp::packets::{
 use crate::avrcp::session::{AvrcpCommand, CommandResponseSender, EventParser};
 use crate::l2cap::channel::Channel;
 use crate::l2cap::{ProtocolDelegate, ProtocolHandler, ProtocolHandlerProvider, AVCTP_PSM};
-use crate::utils::{select2, Either2};
+use crate::utils::{select2, Either2, LoggableResult, IgnoreableResult};
 use crate::{ensure, hci};
 
 mod error;
@@ -52,10 +52,13 @@ impl Avrcp {
         }
     }
 
-    fn handle_control(&self, mut channel: Channel) -> bool {
+    fn handle_control(&self, mut channel: Channel) {
         let handle = channel.connection_handle();
         let success = self.existing_connections.lock().insert(handle);
         if success {
+            if channel.accept_connection().log_err().is_err() {
+                return;
+            }
             let existing_connections = self.existing_connections.clone();
             let session_handler = self.session_handler.clone();
             spawn(async move {
@@ -85,8 +88,9 @@ impl Avrcp {
                 trace!("AVCTP connection closed");
                 existing_connections.lock().remove(&handle);
             });
+        } else {
+            channel.reject_connection().ignore();
         }
-        success
     }
 }
 

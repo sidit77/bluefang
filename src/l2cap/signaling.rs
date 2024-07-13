@@ -3,13 +3,12 @@ use std::panic::Location;
 use bytes::{Bytes, BytesMut};
 use instructor::utils::Length;
 use instructor::{Buffer, BufferMut, Exstruct, Instruct, LittleEndian};
-use tokio::sync::mpsc::unbounded_channel;
 use tracing::{debug, error, instrument, trace, warn, Span};
 
 use crate::hci::{AclSendError, AclSender, Error};
 use crate::l2cap::configuration::ConfigurationParameter;
-use crate::l2cap::{ChannelEvent, ConfigureResult, ConnectionResult, ConnectionStatus, L2capHeader, L2capServer, CID_ID_SIGNALING};
-use crate::utils::{catch_error, ResultExt};
+use crate::l2cap::{ChannelEvent, ConfigureResult, ConnectionResult, ConnectionStatus, L2capHeader, L2capServer, CID_ID_SIGNALING, CID_RANGE_DYNAMIC};
+use crate::utils::{catch_error, IgnoreableResult};
 use crate::{ensure, log_assert};
 
 #[derive(Debug, Copy, Clone)]
@@ -100,24 +99,24 @@ impl L2capServer {
         let psm: u64 = data.read_le::<Psm>()?.0;
         let scid: u16 = data.read_le()?;
         data.finish()?;
-        let (tx, rx) = unbounded_channel();
-        let resp = self.handle_channel_connection(ctx.handle, psm, scid, rx);
+        debug!("Connection request: PSM={:04X} SCID={:04X}", psm, scid);
 
-        self.sender
-            .send_signaling(
-                ctx,
-                SignalingCode::ConnectionResponse,
-                (
-                    resp.ok().unwrap_or_default(),
-                    scid,
-                    resp.err().unwrap_or(ConnectionResult::Success),
-                    ConnectionStatus::NoFurtherInformation
-                )
-            )
-            .unwrap_or_else(|err| warn!("Failed to send connection response: {:?}", err));
-        let _ = tx.send(ChannelEvent::OpenChannelResponseSent(resp.is_ok()));
-        if let Ok(dcid) = resp {
-            self.channels.insert(dcid, (scid, tx));
+        let result: Result<(), ConnectionResult> = catch_error(|| {
+            ensure!(CID_RANGE_DYNAMIC.contains(&scid), ConnectionResult::RefusedInvalidSourceCid);
+            let mut channel = self.new_channel(ctx.handle)
+                .ok_or(ConnectionResult::RefusedNoResources)?;
+            channel.connection_request_received(scid, ctx.id);
+            let server = self
+                .handlers
+                .get_mut(&psm)
+                .ok_or(ConnectionResult::RefusedPsmNotSupported)?;
+            server.handle(channel);
+            Ok(())
+        });
+        if let Err(result) = result {
+            self.sender
+                .send_signaling(ctx, SignalingCode::ConnectionResponse, (0, scid, result, ConnectionStatus::NoFurtherInformation))
+                .ignore();
         }
         Ok(())
     }
@@ -158,7 +157,7 @@ impl L2capServer {
         data.finish()?;
         debug!("Disconnect request: DCID={:04X} SCID={:04X}", dcid, scid);
         match self.channels.remove(&dcid) {
-            Some((_, channel)) => {
+            Some(channel) => {
                 let _ = channel.send(ChannelEvent::DisconnectRequest(ctx.id));
                 Ok(())
             }
@@ -173,7 +172,7 @@ impl L2capServer {
         data.finish()?;
         debug!("Disconnect response: DCID={:04X} SCID={:04X}", dcid, scid);
         match self.channels.remove(&dcid) {
-            Some((_, channel)) => {
+            Some(channel) => {
                 let _ = channel.send(ChannelEvent::DisconnectResponse(ctx.id));
                 Ok(())
             }
@@ -297,6 +296,18 @@ impl Exstruct<LittleEndian> for Psm {
             ensure!(index < 8, instructor::Error::InvalidValue);
         }
         Ok(Self(value))
+    }
+}
+
+impl Instruct<LittleEndian> for Psm {
+    fn write_to_buffer<B: BufferMut>(&self, buffer: &mut B) {
+        let mut value = self.0;
+        while value != 0 {
+            let octet = (value & 0xFF) as u8;
+            value >>= 8;
+            assert_eq!(octet & 0x01, if value != 0 { 0x01 } else { 0x00 });
+            buffer.write_le(value);
+        }
     }
 }
 

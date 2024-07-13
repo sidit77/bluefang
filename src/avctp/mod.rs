@@ -9,7 +9,7 @@ use tracing::{debug, warn};
 use crate::avctp::packets::{ControlChannelExt, MessageAssembler};
 use crate::l2cap::channel::{Channel, Error as L2capError};
 use crate::sdp::Uuid;
-use crate::utils::ResultExt;
+use crate::utils::IgnoreableResult;
 
 pub struct Avctp {
     channel: Channel,

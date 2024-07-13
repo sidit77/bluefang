@@ -21,7 +21,7 @@ use crate::l2cap::channel::{Channel, Error as L2capError};
 use crate::l2cap::{ProtocolHandler, SDP_PSM};
 use crate::sdp::error::{Error, SdpErrorCodes};
 use crate::sdp::service::Service;
-use crate::utils::catch_error;
+use crate::utils::{catch_error, LoggableResult};
 
 pub trait ServiceRecord {
     fn handle(&self) -> u32;
@@ -59,7 +59,10 @@ impl ProtocolHandler for Sdp {
         SDP_PSM as u64
     }
 
-    fn handle(&self, mut channel: Channel) -> bool {
+    fn handle(&self, mut channel: Channel) {
+        if channel.accept_connection().log_err().is_err() {
+            return;
+        }
         let server = self.clone();
         spawn(async move {
             if let Err(err) = channel.configure().await {
@@ -74,7 +77,6 @@ impl ProtocolHandler for Sdp {
                 });
             trace!("SDP connection closed");
         });
-        true
     }
 }
 

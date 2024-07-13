@@ -21,7 +21,7 @@ use crate::avdtp::packets::{MessageType, ServiceCategory, SignalChannelExt, Sign
 use crate::ensure;
 use crate::l2cap::channel::{Channel, Error as L2capError};
 use crate::l2cap::{ProtocolHandler, AVDTP_PSM};
-use crate::utils::{select_all, MutexCell, OptionFuture};
+use crate::utils::{select_all, MutexCell, OptionFuture, LoggableResult, IgnoreableResult};
 
 pub use endpoint::{LocalEndpoint, StreamHandler, StreamHandlerFactory};
 pub use packets::{MediaType, StreamEndpointType};
@@ -59,7 +59,7 @@ impl ProtocolHandler for Avdtp {
         AVDTP_PSM as u64
     }
 
-    fn handle(&self, mut channel: Channel) -> bool {
+    fn handle(&self, mut channel: Channel) {
         let handle = channel.connection_handle();
         let pending_stream = self.pending_streams.lock().get(&handle).cloned();
         match pending_stream {
@@ -73,6 +73,9 @@ impl ProtocolHandler for Avdtp {
 
                 let local_endpoints = self.local_endpoints.clone();
 
+                if channel.accept_connection().log_err().is_err() {
+                    return;
+                }
                 // Use an OS thread instead a tokio task to avoid blocking the runtime with audio processing
                 let runtime = Handle::current();
                 std::thread::spawn(move || {
@@ -97,11 +100,13 @@ impl ProtocolHandler for Avdtp {
                         pending_streams.lock().remove(&handle);
                     })
                 });
-                true
             }
             Some(pending) => match pending.take() {
                 Some(sender) => {
                     trace!("Existing AVDTP session (transport channel)");
+                    if channel.accept_connection().log_err().is_err() {
+                        return;
+                    }
                     spawn(async move {
                         if let Err(err) = channel.configure().await {
                             warn!("Error configuring channel: {:?}", err);
@@ -111,11 +116,12 @@ impl ProtocolHandler for Avdtp {
                             .send(channel)
                             .unwrap_or_else(|_| error!("Failed to send channel to session"));
                     });
-                    true
                 }
                 None => {
                     warn!("Unexpected transport channel connection attempt");
-                    false
+                    channel
+                        .reject_connection()
+                        .ignore();
                 }
             }
         }

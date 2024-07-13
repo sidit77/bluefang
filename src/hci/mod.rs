@@ -30,7 +30,7 @@ use crate::hci::acl::{AclHeader, BoundaryFlag, BroadcastFlag};
 use crate::hci::consts::{EventCode, EventMask, Status};
 use crate::hci::event_loop::{CmdResultSender, EventLoopCommand};
 use crate::host::usb::UsbHost;
-use crate::utils::IgnoreableError;
+use crate::utils::Loggable;
 
 //TODO make generic over transport
 pub struct Hci {
@@ -168,7 +168,7 @@ pub enum AclSendError {
     InvalidData(#[from] instructor::Error)
 }
 
-impl IgnoreableError for AclSendError {
+impl Loggable for AclSendError {
     fn should_log(&self) -> bool {
         matches!(self, AclSendError::InvalidData(_))
     }
