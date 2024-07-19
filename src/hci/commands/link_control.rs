@@ -1,7 +1,9 @@
 use bytes::BufMut;
-use instructor::{BufferMut, Exstruct, Instruct};
+use instructor::{Buffer, BufferMut, Exstruct, Instruct};
+use tokio::sync::mpsc::unbounded_channel;
+use crate::ensure;
 
-use crate::hci::consts::{AuthenticationRequirements, IoCapability, Lap, LinkKey, OobDataPresence, RemoteAddr, Role, Status};
+use crate::hci::consts::{AuthenticationRequirements, EncryptionMode, EventCode, IoCapability, Lap, LinkKey, OobDataPresence, RemoteAddr, Role, Status};
 use crate::hci::{Error, Hci, Opcode, OpcodeGroup};
 
 impl Hci {
@@ -90,6 +92,56 @@ impl Hci {
             p.put_bytes(0, 16 - pin.len());
         })
         .await
+    }
+
+    /// ([Vol 4] Part E, Section 7.1.15).
+    pub async fn request_authentication(&self, handle: u16) -> Result<(), Error> {
+        let (tx, mut rx) = unbounded_channel();
+        self.register_event_handler([EventCode::AuthenticationComplete], tx)?;
+        self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x0011), |p| {
+            p.write_le(handle);
+        }).await?;
+        while let Some((code, mut packet)) = rx.recv().await {
+            assert_eq!(code, EventCode::AuthenticationComplete);
+            let status: Status = packet.read_le()?;
+            let handle: u16 = packet.read_le()?;
+            packet.finish()?;
+            if handle == handle {
+                ensure!(status.is_ok(), Error::Controller(status));
+                return Ok(());
+            }
+        }
+        Err(Error::EventLoopClosed)
+    }
+
+    /// ([Vol 4] Part E, Section 7.1.16).
+    pub async fn set_encryption(&self, handle: u16, enabled: bool) -> Result<(EncryptionMode, Option<u8>), Error> {
+        let (tx, mut rx) = unbounded_channel();
+        self.register_event_handler([EventCode::EncryptionChange, EventCode::EncryptionChangeV2], tx)?;
+        self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x0013), |p| {
+            p.write_le(handle);
+            p.write_le(u8::from(enabled));
+        }).await?;
+        while let Some((code, mut packet)) = rx.recv().await {
+            assert!(matches!(code, EventCode::EncryptionChange | EventCode::EncryptionChangeV2));
+            let status: Status = packet.read_le()?;
+            let handle: u16 = packet.read_le()?;
+            let mode: EncryptionMode = packet.read_le()?;
+            let key_size: u8 = if code == EventCode::EncryptionChangeV2 {
+                packet.read_le()?
+            } else {
+                0
+            };
+            let key_size = (key_size > 0 && mode != EncryptionMode::Off).then_some(key_size);
+            packet.finish()?;
+            if handle == handle {
+                ensure!(status.is_ok(), Error::Controller(status));
+                return Ok((mode, key_size));
+            }
+        }
+        Err(Error::EventLoopClosed)
+
+
     }
 
     /// ([Vol 4] Part E, Section 7.1.19).

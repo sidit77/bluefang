@@ -9,6 +9,7 @@ use num_enum::TryFromPrimitive;
 
 pub use info_params::*;
 pub use link_control::*;
+pub use link_policy::*;
 
 //pub use hci_control::*;
 

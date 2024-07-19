@@ -107,6 +107,13 @@ impl<T> Loggable for tokio::sync::mpsc::error::TrySendError<T> {
     }
 }
 
+impl<T> Loggable for tokio::sync::mpsc::error::SendError<T> {
+    fn should_log(&self) -> bool {
+        false
+    }
+}
+
+
 pub trait LoggableResult<T, E> {
     fn log_err(self) -> Result<T, E>;
 }

@@ -158,7 +158,6 @@ impl L2capServer {
                             .is_none()
                     );
                     debug!("Connection complete: 0x{:04X} {}", handle, addr);
-
                 } else {
                     warn!("Connection failed: {:?}", status);
                 }
@@ -360,6 +359,15 @@ impl<P> ProtocolHandlerProvider for P
     }
 }
 
+impl<P> ProtocolHandlerProvider for Arc<P>
+    where
+        P: ProtocolHandler + 'static
+{
+    fn protocol_handlers(&self) -> Vec<Arc<dyn ProtocolHandler>> {
+        vec![self.clone()]
+    }
+}
+
 pub struct ProtocolDelegate<H, F> {
     psm: u64,
     handler: H,
@@ -389,7 +397,7 @@ impl<H, F> ProtocolHandler for ProtocolDelegate<H, F>
         self.psm
     }
 
-    fn handle(&self,channel: Channel) {
+    fn handle(&self, channel: Channel) {
         (self.map_func)(&self.handler, channel)
     }
 }

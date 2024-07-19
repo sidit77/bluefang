@@ -20,7 +20,7 @@ use crate::avdtp::endpoint::Stream;
 use crate::avdtp::packets::{MessageType, ServiceCategory, SignalChannelExt, SignalIdentifier, SignalMessage, SignalMessageAssembler};
 use crate::ensure;
 use crate::l2cap::channel::{Channel, Error as L2capError};
-use crate::l2cap::{ProtocolHandler, AVDTP_PSM};
+use crate::l2cap::{ProtocolHandler, AVDTP_PSM, L2capServer};
 use crate::utils::{select_all, MutexCell, OptionFuture, LoggableResult, IgnoreableResult};
 
 pub use endpoint::{LocalEndpoint, StreamHandler, StreamHandlerFactory};
@@ -54,6 +54,18 @@ pub struct Avdtp {
     local_endpoints: Arc<[LocalEndpoint]>
 }
 
+impl Avdtp {
+
+    pub fn connect(self: Arc<Self>, l2cap: &mut L2capServer, handle: u16) {
+        let mut channel = l2cap.new_channel(handle).expect("Failed to create channel");
+        spawn(async move {
+            channel.connect(self.psm()).await.ignore();
+            self.handle(channel);
+        });
+    }
+
+}
+
 impl ProtocolHandler for Avdtp {
     fn psm(&self) -> u64 {
         AVDTP_PSM as u64
@@ -73,7 +85,7 @@ impl ProtocolHandler for Avdtp {
 
                 let local_endpoints = self.local_endpoints.clone();
 
-                if channel.accept_connection().log_err().is_err() {
+                if channel.is_response_pending() && channel.accept_connection().log_err().is_err() {
                     return;
                 }
                 // Use an OS thread instead a tokio task to avoid blocking the runtime with audio processing

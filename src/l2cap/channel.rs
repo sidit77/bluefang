@@ -124,6 +124,10 @@ impl Channel {
         }
     }
 
+    pub fn is_response_pending(&self) -> bool {
+        matches!(self.state, State::Closed(ClosedState::WaitingForResponse(_)))
+    }
+
     pub fn connection_request_received(&mut self, remote_cid: u16, transaction_id: u8) {
         debug_assert!(self.state == State::Closed(ClosedState::Idle), "Connection request received in non-idle state");
         self.set_remote_cid(remote_cid);
