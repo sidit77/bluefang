@@ -32,7 +32,7 @@ const CID_RANGE_DYNAMIC: Range<u16> = 0x0040..0xFFFF;
 
 #[derive(Default)]
 pub struct L2capServerBuilder {
-    handlers: BTreeMap<u64, Box<dyn ProtocolHandler>>
+    handlers: BTreeMap<u64, Arc<dyn ProtocolHandler>>
 }
 
 impl L2capServerBuilder {
@@ -88,7 +88,7 @@ pub struct L2capServer {
 
     sender: AclSender,
     connections: BTreeMap<u16, PhysicalConnection>,
-    handlers: BTreeMap<u64, Box<dyn ProtocolHandler>>,
+    handlers: BTreeMap<u64, Arc<dyn ProtocolHandler>>,
     channels: BTreeMap<u16, MpscSender<ChannelEvent>>,
     next_signaling_id: SignalingIds
 }
@@ -158,6 +158,7 @@ impl L2capServer {
                             .is_none()
                     );
                     debug!("Connection complete: 0x{:04X} {}", handle, addr);
+
                 } else {
                     warn!("Connection failed: {:?}", status);
                 }
@@ -341,21 +342,21 @@ pub enum ChannelEvent {
 }
 
 pub trait ProtocolHandlerProvider {
-    fn protocol_handlers(&self) -> Vec<Box<dyn ProtocolHandler>>;
+    fn protocol_handlers(&self) -> Vec<Arc<dyn ProtocolHandler>>;
 }
 
-pub trait ProtocolHandler: Send {
+pub trait ProtocolHandler: Send + Sync {
     fn psm(&self) -> u64;
 
     fn handle(&self, channel: Channel);
 }
 
 impl<P> ProtocolHandlerProvider for P
-where
-    P: ProtocolHandler + Clone + 'static
+    where
+        P: ProtocolHandler + Clone + 'static
 {
-    fn protocol_handlers(&self) -> Vec<Box<dyn ProtocolHandler>> {
-        vec![Box::new(self.clone())]
+    fn protocol_handlers(&self) -> Vec<Arc<dyn ProtocolHandler>> {
+        vec![Arc::new(self.clone())]
     }
 }
 
@@ -366,12 +367,12 @@ pub struct ProtocolDelegate<H, F> {
 }
 
 impl<H, F> ProtocolDelegate<H, F>
-where
-    H: Send + 'static,
-    F: Fn(&H, Channel) + Send + 'static
+    where
+        H: Send  + Sync + 'static,
+        F: Fn(&H, Channel) + Send + Sync + 'static
 {
-    pub fn boxed<I: Into<u64>>(psm: I, handler: H, map_func: F) -> Box<dyn ProtocolHandler> {
-        Box::new(Self {
+    pub fn boxed<I: Into<u64>>(psm: I, handler: H, map_func: F) -> Arc<dyn ProtocolHandler> {
+        Arc::new(Self {
             psm: psm.into(),
             handler,
             map_func
@@ -380,15 +381,15 @@ where
 }
 
 impl<H, F> ProtocolHandler for ProtocolDelegate<H, F>
-where
-    H: Send,
-    F: Fn(&H, Channel) + Send
+    where
+        H: Send + Sync,
+        F: Fn(&H, Channel) + Send + Sync
 {
     fn psm(&self) -> u64 {
         self.psm
     }
 
-    fn handle(&self, channel: Channel) {
+    fn handle(&self,channel: Channel) {
         (self.map_func)(&self.handler, channel)
     }
 }

@@ -39,7 +39,7 @@ pub struct Avrcp {
 }
 
 impl ProtocolHandlerProvider for Avrcp {
-    fn protocol_handlers(&self) -> Vec<Box<dyn ProtocolHandler>> {
+    fn protocol_handlers(&self) -> Vec<Arc<dyn ProtocolHandler>> {
         vec![ProtocolDelegate::boxed(AVCTP_PSM, self.clone(), Self::handle_control)]
     }
 }

@@ -103,14 +103,15 @@ impl L2capServer {
         debug!("Connection request: PSM={:04X} SCID={:04X}", psm, scid);
 
         let result: Result<(), ConnectionResult> = catch_error(|| {
+            let server = self
+                .handlers
+                .get_mut(&psm)
+                .ok_or(ConnectionResult::RefusedPsmNotSupported)?
+                .clone();
             ensure!(CID_RANGE_DYNAMIC.contains(&scid), ConnectionResult::RefusedInvalidSourceCid);
             let mut channel = self.new_channel(ctx.handle)
                 .ok_or(ConnectionResult::RefusedNoResources)?;
             channel.connection_request_received(scid, ctx.id);
-            let server = self
-                .handlers
-                .get_mut(&psm)
-                .ok_or(ConnectionResult::RefusedPsmNotSupported)?;
             server.handle(channel);
             Ok(())
         });
@@ -319,12 +320,16 @@ impl Exstruct<LittleEndian> for Psm {
 
 impl Instruct<LittleEndian> for Psm {
     fn write_to_buffer<B: BufferMut>(&self, buffer: &mut B) {
-        let mut value = self.0;
-        while value != 0 {
-            let octet = (value & 0xFF) as u8;
-            value >>= 8;
-            assert_eq!(octet & 0x01, if value != 0 { 0x01 } else { 0x00 });
-            buffer.write_le(value);
+        let mut end = false;
+        for octet in self.0.to_le_bytes() {
+            if !end {
+                buffer.write_le(octet);
+                if octet & 0x01 == 0 {
+                    end = true;
+                }
+            } else {
+                assert_eq!(octet, 0x00);
+            }
         }
     }
 }
