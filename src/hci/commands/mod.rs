@@ -1,6 +1,7 @@
 mod hci_control;
 mod info_params;
 mod link_control;
+mod link_policy;
 
 use std::fmt::{Debug, Formatter};
 use instructor::Exstruct;

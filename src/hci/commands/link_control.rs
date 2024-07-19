@@ -22,6 +22,19 @@ impl Hci {
         Ok(())
     }
 
+    // ([Vol 4] Part E, Section 7.1.5).
+    pub async fn create_connection(&self, addr: RemoteAddr, allow_role_switch: bool) -> Result<(), Error> {
+        self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x0005), |p| {
+            p.write_le(addr);
+            p.write_le(0xCC18u16);
+            p.write_le(PageScanRepititionMode::R2);
+            p.write_le(0x00u8);
+            p.write_le(0x00u16);
+            p.write_le(u8::from(allow_role_switch));
+        }).await?;
+        Ok(())
+    }
+
     /// Accept a connection request from a remote device.
     /// ([Vol 4] Part E, Section 7.1.8).
     pub async fn accept_connection_request(&self, bd_addr: RemoteAddr, role: Role) -> Result<(), Error> {
