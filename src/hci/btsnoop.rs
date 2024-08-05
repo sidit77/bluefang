@@ -1,7 +1,8 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
+use std::sync::OnceLock;
 use std::thread::{spawn, JoinHandle};
 use std::time::{Duration, SystemTime};
 
@@ -19,10 +20,23 @@ pub struct LogWriter {
     thread: Option<JoinHandle<()>>
 }
 
+static LOG_LOCATION: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+fn get_location() -> Option<&'static PathBuf> {
+    LOG_LOCATION.get_or_init(|| {
+        std::env::var_os("BTSNOOP_LOG")
+            .map(PathBuf::from)
+    }).as_ref()
+}
+
+pub fn set_location(path: PathBuf) {
+    LOG_LOCATION.set(Some(path)).expect("btsnoop log location already set");
+}
+
 impl LogWriter {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        match std::env::var_os("BTSNOOP_LOG").map(PathBuf::from) {
+        match get_location() {
             Some(path) => {
                 let (sender, receiver) = std::sync::mpsc::channel();
                 let thread = spawn(move || {
@@ -38,8 +52,8 @@ impl LogWriter {
         }
     }
 
-    fn writer_thread(path: PathBuf, receiver: Receiver<(SystemTime, PacketType, Bytes)>) -> std::io::Result<()> {
-        let mut file = BufWriter::new(File::create(&path)?);
+    fn writer_thread(path: &Path, receiver: Receiver<(SystemTime, PacketType, Bytes)>) -> std::io::Result<()> {
+        let mut file = BufWriter::new(File::create(path)?);
         info!("Writing btsnoop log to {:?}", path);
         file.write_all(BTSNOOP_MAGIC)?;
         file.write_all(&BTSNOOP_VERSION.to_be_bytes())?;
