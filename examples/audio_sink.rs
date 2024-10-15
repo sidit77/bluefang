@@ -33,7 +33,7 @@ use ringbuf::producer::Producer;
 use ringbuf::traits::Split;
 use ringbuf::{HeapProd, HeapRb};
 use rubato::{FastFixedIn, PolynomialDegree, Resampler};
-use sbc_rs::Decoder;
+use sbc_rs::BufferedDecoder;
 use tokio::spawn;
 use tokio::sync::mpsc::Receiver;
 use tokio::time::sleep;
@@ -208,7 +208,7 @@ async fn retrieve_current_track_info(session: &AvrcpSession) -> anyhow::Result<(
 struct SbcStreamHandler {
     audio_session: AudioSession,
     resampler: FastFixedIn<f32>,
-    decoder: Decoder,
+    decoder: BufferedDecoder,
     volume: Arc<AtomicF32>,
     input_buffers: [Vec<f32>; 2],
     output_buffers: [Vec<f32>; 2],
@@ -233,7 +233,7 @@ impl SbcStreamHandler {
         .unwrap();
 
         Self {
-            decoder: Decoder::new(Vec::new()),
+            decoder: BufferedDecoder::default(),
             volume,
             input_buffers: from_fn(|_| vec![0f32; resampler.input_frames_max()]),
             output_buffers: from_fn(|_| vec![0f32; resampler.output_frames_max()]),
