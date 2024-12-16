@@ -108,8 +108,8 @@ impl Sdp {
                         .collect::<Vec<_>>();
 
                     Ok(ResponsePacket::Search {
-                        total_service_record_count: maximum_service_record_count,
-                        current_service_record_count: maximum_service_record_count,
+                        total_service_record_count: attribute_list.len() as u16,
+                        current_service_record_count: attribute_list.len() as u16,
                         service_record_handles: attribute_list,
                         continuation_state: ContinuationState::None
                     })
