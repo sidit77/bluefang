@@ -19,7 +19,7 @@ impl Hci {
     pub async fn switch_role(&self, addr: RemoteAddr, role: Role) -> Result<Role, Error> {
         let (tx, mut rx) = unbounded_channel();
         self.register_event_handler([EventCode::RoleChange], tx)?;
-        self.call_with_args(Opcode::new(OpcodeGroup::LinkPolicy, 0x000B), |p| {
+        self.call_with_args::<()>(Opcode::new(OpcodeGroup::LinkPolicy, 0x000B), |p| {
             p.write_le(addr);
             p.write_le(role);
         }).await?;

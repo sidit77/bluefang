@@ -14,7 +14,7 @@ impl Hci {
     /// - `time`: The duration of the inquiry process in 1.28s units. Range: 1-30.
     /// - `max_responses`: The maximum number of responses to receive. 0 means no limit.
     pub async fn inquiry(&self, lap: Lap, time: u8, max_responses: u8) -> Result<(), Error> {
-        self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x0001), |p| {
+        self.call_with_args::<()>(Opcode::new(OpcodeGroup::LinkControl, 0x0001), |p| {
             p.write_le(lap);
             p.write_le(time);
             p.write_le(max_responses);
@@ -26,7 +26,7 @@ impl Hci {
 
     // ([Vol 4] Part E, Section 7.1.5).
     pub async fn create_connection(&self, addr: RemoteAddr, allow_role_switch: bool) -> Result<(), Error> {
-        self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x0005), |p| {
+        self.call_with_args::<()>(Opcode::new(OpcodeGroup::LinkControl, 0x0005), |p| {
             p.write_le(addr);
             p.write_le(0xCC18u16);
             p.write_le(PageScanRepititionMode::R2);
@@ -40,7 +40,7 @@ impl Hci {
     /// Accept a connection request from a remote device.
     /// ([Vol 4] Part E, Section 7.1.8).
     pub async fn accept_connection_request(&self, bd_addr: RemoteAddr, role: Role) -> Result<(), Error> {
-        self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x0009), |p| {
+        self.call_with_args::<()>(Opcode::new(OpcodeGroup::LinkControl, 0x0009), |p| {
             p.write_le(bd_addr);
             p.write_le(role);
         })
@@ -57,7 +57,7 @@ impl Hci {
                 | Status::ConnectionRejectedDueToSecurityReasons
                 | Status::ConnectionRejectedDueToUnacceptableBdAddr
         ));
-        self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x000A), |p| {
+        self.call_with_args::<()>(Opcode::new(OpcodeGroup::LinkControl, 0x000A), |p| {
             p.write_le(bd_addr);
             p.write_le(reason);
         })
@@ -98,7 +98,7 @@ impl Hci {
     pub async fn request_authentication(&self, handle: u16) -> Result<(), Error> {
         let (tx, mut rx) = unbounded_channel();
         self.register_event_handler([EventCode::AuthenticationComplete], tx)?;
-        self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x0011), |p| {
+        self.call_with_args::<()>(Opcode::new(OpcodeGroup::LinkControl, 0x0011), |p| {
             p.write_le(handle);
         }).await?;
         while let Some((code, mut packet)) = rx.recv().await {
@@ -118,7 +118,7 @@ impl Hci {
     pub async fn set_encryption(&self, handle: u16, enabled: bool) -> Result<(EncryptionMode, Option<u8>), Error> {
         let (tx, mut rx) = unbounded_channel();
         self.register_event_handler([EventCode::EncryptionChange, EventCode::EncryptionChangeV2], tx)?;
-        self.call_with_args(Opcode::new(OpcodeGroup::LinkControl, 0x0013), |p| {
+        self.call_with_args::<()>(Opcode::new(OpcodeGroup::LinkControl, 0x0013), |p| {
             p.write_le(handle);
             p.write_le(u8::from(enabled));
         }).await?;

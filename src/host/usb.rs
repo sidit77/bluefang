@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use nusb::descriptors::InterfaceAltSetting;
 use nusb::transfer::Direction::{In, Out};
 use nusb::transfer::EndpointType::{Bulk, Interrupt};
@@ -17,6 +18,7 @@ impl UsbController {
         Ok(nusb::list_devices()?
             .filter(filter)
             .filter_map(|info| {
+                debug!("Attempting to open: {} ({:04X} {:04X})", info.product_string().unwrap_or("<unknown>"), info.vendor_id(), info.product_id());
                 info.open()
                     .map_err(|e| warn!("Failed to open device ({e})"))
                     .ok()
