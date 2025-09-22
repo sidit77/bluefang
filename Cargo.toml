@@ -10,7 +10,7 @@ codegen-units=1
 
 [dependencies]
 tracing = "0.1.40"
-nusb = "0.1.9"
+nusb = "0.1.14"
 thiserror = "1.0.61"
 tokio = { version = "1.38.0", features = ["rt", "sync", "fs", "parking_lot", "macros", "time"] }
 num_enum = "0.7.2"

@@ -109,7 +109,7 @@ pub async fn event_loop(
                     log.write(PacketType::Command, req.clone());
                     let cmd = transport.interface.control_out(ControlOut {
                         control_type: ControlType::Class,
-                        recipient: Recipient::Interface,
+                        recipient: Recipient::Device,
                         request: 0x00,
                         value: 0x00,
                         index: transport.endpoints.main_iface.into(),
